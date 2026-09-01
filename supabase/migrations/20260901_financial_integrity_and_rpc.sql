@@ -78,31 +78,39 @@ BEGIN
     END IF;
   END IF;
 
-  -- 4. Bloquear e Verificar Estado da Rodada (compatível com IDs text / uuid)
+  -- 4. Extrair número da rodada e verificar/bloquear estado (compatível com IDs text, uuid e round_number)
+  v_round_number := COALESCE(NULLIF(regexp_replace(p_round_id, '\D', '', 'g'), '')::INT, 1000);
+
   SELECT status, round_number INTO v_round_status, v_round_number
   FROM public.game_rounds
-  WHERE id::text = p_round_id OR id::text = 'rnd_' || p_round_id OR round_number::text = p_round_id;
+  WHERE id::text = p_round_id 
+     OR id::text = 'rnd_' || p_round_id 
+     OR round_number = v_round_number;
 
   IF v_round_status IS NULL THEN
-    v_round_number := COALESCE(NULLIF(regexp_replace(p_round_id, '\D', '', 'g'), '')::INT, 1000);
-    INSERT INTO public.game_rounds (id, round_number, status, server_seed_hash, client_seed, started_at)
-    VALUES (
-      p_round_id,
-      v_round_number,
-      'COUNTDOWN',
-      encode(digest(p_round_id || '_seed', 'sha256'), 'hex'),
-      'skybird_client_seed_main',
-      NOW()
-    )
-    ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status;
+    BEGIN
+      INSERT INTO public.game_rounds (id, round_number, status, server_seed_hash, client_seed, started_at)
+      VALUES (
+        p_round_id,
+        v_round_number,
+        'COUNTDOWN',
+        encode(digest(p_round_id || '_seed', 'sha256'), 'hex'),
+        'skybird_client_seed_main',
+        NOW()
+      )
+      ON CONFLICT DO NOTHING;
+    EXCEPTION WHEN OTHERS THEN
+      NULL;
+    END;
 
     SELECT status, round_number INTO v_round_status, v_round_number
     FROM public.game_rounds
-    WHERE id::text = p_round_id OR id::text = 'rnd_' || p_round_id OR round_number::text = p_round_id;
+    WHERE id::text = p_round_id 
+       OR id::text = 'rnd_' || p_round_id 
+       OR round_number = v_round_number;
 
     IF v_round_status IS NULL THEN
       v_round_status := 'COUNTDOWN';
-      v_round_number := v_round_number;
     END IF;
   END IF;
 
@@ -243,10 +251,14 @@ BEGIN
   END IF;
 
   -- 4. Bloquear e Validar a Rodada no Servidor
+  v_round_number := COALESCE(NULLIF(regexp_replace(v_round_id_text, '\D', '', 'g'), '')::INT, 1000);
+
   SELECT status, crash_point, round_number, started_at
   INTO v_round_status, v_crash_point, v_round_number, v_started_at
   FROM public.game_rounds
   WHERE id::text = v_round_id_text
+     OR id::text = 'rnd_' || v_round_id_text
+     OR round_number = v_round_number
   FOR UPDATE;
 
   -- REGRA DE OURO DA CORRIDA: Se a rodada já caiu (CRASHED), o cashout é REJEITADO

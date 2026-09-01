@@ -138,9 +138,19 @@ export async function serverPlaceBet(params: {
       }
     }
 
-    if (error && error.message.includes('ROUND_NOT_FOUND')) {
+    const isRoundNotFound = error && (
+      error.message.includes('ROUND_NOT_FOUND') ||
+      error.message.includes('Rodada não encontrada') ||
+      error.message.toLowerCase().includes('round') ||
+      error.message.toLowerCase().includes('not found') ||
+      error.message.toLowerCase().includes('invalid input syntax')
+    );
+
+    if (isRoundNotFound) {
       // Auto-criar a rodada na tabela game_rounds do Supabase e tentar novamente
       const rNum = Number(params.roundId.replace(/\D/g, '')) || 1000;
+
+      // 1. Tentar upsert com id de texto
       await supabase.from('game_rounds').upsert({
         id: params.roundId,
         round_number: rNum,
@@ -148,7 +158,16 @@ export async function serverPlaceBet(params: {
         server_seed_hash: 'skybird_auto_hash',
         client_seed: 'skybird_client_seed_main',
         started_at: new Date().toISOString()
-      }, { onConflict: 'id' });
+      }, { onConflict: 'id' }).then(null, () => null);
+
+      // 2. Tentar upsert com round_number
+      await supabase.from('game_rounds').upsert({
+        round_number: rNum,
+        status: 'COUNTDOWN',
+        server_seed_hash: 'skybird_auto_hash',
+        client_seed: 'skybird_client_seed_main',
+        started_at: new Date().toISOString()
+      }, { onConflict: 'round_number' }).then(null, () => null);
 
       const retryRound = await supabase.rpc('place_bet', {
         p_amount:          params.amount,
@@ -161,6 +180,19 @@ export async function serverPlaceBet(params: {
       if (!retryRound.error) {
         data = retryRound.data;
         error = null;
+      } else {
+        // Tentar com round_number como string simples ('1001')
+        const retryNumStr = await supabase.rpc('place_bet', {
+          p_amount:          params.amount,
+          p_auto_cashout:    params.autoCashout ?? null,
+          p_panel_id:        params.panelId ?? 1,
+          p_round_id:        String(rNum),
+          p_idempotency_key: dbIdempotencyKey
+        });
+        if (!retryNumStr.error) {
+          data = retryNumStr.data;
+          error = null;
+        }
       }
     }
 
