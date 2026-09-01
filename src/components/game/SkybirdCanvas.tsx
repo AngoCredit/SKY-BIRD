@@ -41,7 +41,7 @@ export const SkybirdCanvas: React.FC<SkybirdCanvasProps> = React.memo(({
     const container = containerRef.current;
     if (!container) return;
 
-    // --- 1. SCENE & RENDERER SETUP ---
+    // --- 1. SCENE & RENDERER SETUP WITH SAFE WEBGL & 2D FALLBACK ---
     const scene = new THREE.Scene();
     scene.fog = new THREE.FogExp2(0x0a1128, 0.008);
 
@@ -49,25 +49,40 @@ export const SkybirdCanvas: React.FC<SkybirdCanvasProps> = React.memo(({
     const initialHeight = container.clientHeight > 0 ? container.clientHeight : (window.innerHeight || 500);
     const initialAspect = initialHeight > 0 ? initialWidth / initialHeight : 1.77;
 
-    const camera = new THREE.PerspectiveCamera(
-      55,
-      initialAspect,
-      0.1,
-      1000
-    );
+    const camera = new THREE.PerspectiveCamera(55, initialAspect, 0.1, 1000);
     camera.position.set(0, 3, 12);
 
-    const renderer = new THREE.WebGLRenderer({
-      antialias: quality !== 'LOW',
-      alpha: false,
-      powerPreference: 'high-performance'
-    });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality === 'HIGH' ? 2 : 1.25));
-    renderer.setSize(initialWidth, initialHeight);
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.1;
-    container.innerHTML = '';
-    container.appendChild(renderer.domElement);
+    let renderer: THREE.WebGLRenderer | null = null;
+    let fallback2dCanvas: HTMLCanvasElement | null = null;
+    let fallbackCtx: CanvasRenderingContext2D | null = null;
+
+    try {
+      // Try WebGL with auto quality detection
+      const isMobile = /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|Mobile/i.test(navigator.userAgent) || window.innerWidth < 768;
+      renderer = new THREE.WebGLRenderer({
+        antialias: !isMobile && quality !== 'LOW',
+        alpha: false,
+        powerPreference: isMobile ? 'default' : 'high-performance',
+        failIfMajorPerformanceCaveat: false
+      });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isMobile ? 1.25 : (quality === 'HIGH' ? 2 : 1.25)));
+      renderer.setSize(initialWidth, initialHeight);
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.1;
+      container.innerHTML = '';
+      container.appendChild(renderer.domElement);
+    } catch (e) {
+      console.warn('[SkybirdCanvas] WebGLRenderer creation failed, using 2D Fallback Engine:', e);
+      renderer = null;
+      container.innerHTML = '';
+      fallback2dCanvas = document.createElement('canvas');
+      fallback2dCanvas.width = initialWidth;
+      fallback2dCanvas.height = initialHeight;
+      fallback2dCanvas.style.width = '100%';
+      fallback2dCanvas.style.height = '100%';
+      fallbackCtx = fallback2dCanvas.getContext('2d');
+      container.appendChild(fallback2dCanvas);
+    }
 
     // --- 2. LIGHTING ---
     const ambientLight = new THREE.AmbientLight(0x406090, 1.2);
@@ -625,7 +640,60 @@ export const SkybirdCanvas: React.FC<SkybirdCanvasProps> = React.memo(({
           camera.position.set(0, 3, 12);
         }
 
-        renderer.render(scene, camera);
+        if (renderer) {
+          renderer.render(scene, camera);
+        } else if (fallbackCtx && fallback2dCanvas) {
+          // Lightweight 2D canvas fallback for ultra-low WebGL mobile hardware
+          const ctx = fallbackCtx;
+          const cw = fallback2dCanvas.width;
+          const ch = fallback2dCanvas.height;
+
+          ctx.fillStyle = '#050c18';
+          ctx.fillRect(0, 0, cw, ch);
+
+          // Flight Sky Gradient
+          const grad = ctx.createLinearGradient(0, 0, 0, ch);
+          grad.addColorStop(0, curStage === 'STAGE_6_COSMIC_SPACE' ? '#020108' : '#0369a1');
+          grad.addColorStop(1, '#05070d');
+          ctx.fillStyle = grad;
+          ctx.fillRect(0, 0, cw, ch);
+
+          // Draw 2D Cyber Jet icon flying upwards
+          ctx.save();
+          const planeX = cw * 0.4 + Math.sin(elapsedTime * 2) * 15;
+          const planeY = curStatus === 'RUNNING' 
+            ? Math.max(ch * 0.2, ch * 0.65 - Math.min((curMult - 1) * 30, ch * 0.4))
+            : ch * 0.6 + Math.sin(elapsedTime * 3) * 8;
+
+          ctx.translate(planeX, planeY);
+          if (curStatus === 'RUNNING') {
+            ctx.rotate(-0.2);
+          } else if (curStatus === 'CRASHED') {
+            ctx.rotate(elapsedTime * 6);
+          }
+
+          // Jet Body
+          ctx.fillStyle = '#00f7ff';
+          ctx.beginPath();
+          ctx.moveTo(30, 0);
+          ctx.lineTo(-20, -15);
+          ctx.lineTo(-10, 0);
+          ctx.lineTo(-20, 15);
+          ctx.closePath();
+          ctx.fill();
+
+          // Thruster Flame
+          if (curStatus === 'RUNNING') {
+            ctx.fillStyle = '#f59e0b';
+            ctx.beginPath();
+            ctx.moveTo(-10, 0);
+            ctx.lineTo(-35 - Math.random() * 15, -6);
+            ctx.lineTo(-35 - Math.random() * 15, 6);
+            ctx.closePath();
+            ctx.fill();
+          }
+          ctx.restore();
+        }
       } catch (renderError) {
         console.warn('[SkybirdCanvas] Game render loop warning:', renderError);
       }
@@ -641,7 +709,13 @@ export const SkybirdCanvas: React.FC<SkybirdCanvasProps> = React.memo(({
       if (h > 0 && w > 0) {
         camera.aspect = w / h;
         camera.updateProjectionMatrix();
-        renderer.setSize(w, h);
+        if (renderer) {
+          renderer.setSize(w, h);
+        }
+        if (fallback2dCanvas) {
+          fallback2dCanvas.width = w;
+          fallback2dCanvas.height = h;
+        }
       }
     };
 
@@ -651,7 +725,9 @@ export const SkybirdCanvas: React.FC<SkybirdCanvasProps> = React.memo(({
     return () => {
       cancelAnimationFrame(animationFrameId);
       resizeObserver.disconnect();
-      renderer.dispose();
+      if (renderer) {
+        renderer.dispose();
+      }
       scene.clear();
     };
   }, [quality]);

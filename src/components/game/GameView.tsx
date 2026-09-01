@@ -456,24 +456,24 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
 
   return (
     <div className="w-full max-w-7xl mx-auto flex flex-col gap-2.5 select-none font-sans">
-      {/* Top Game Bar (Header info) */}
-      <div className="flex items-center justify-between px-2 sm:px-1 py-1">
+      {/* Top Game Bar (Header info - Mobile responsive) */}
+      <div className="flex flex-wrap items-center justify-between gap-1.5 px-1 py-1 overflow-x-auto no-scrollbar">
         {/* Left: Aviator Live Indicator & Round # */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-500/10 border border-red-500/30 text-red-400 font-bold text-xs">
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+        <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-500/10 border border-red-500/30 text-red-400 font-bold text-[11px] sm:text-xs">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
             <span>AVIATOR SKYBIRD</span>
           </div>
-          <span className="text-xs text-slate-400 font-mono hidden sm:inline">
-            Rodada #{currentRound.roundNumber}
+          <span className="text-[10px] sm:text-xs text-slate-400 font-mono">
+            #{currentRound.roundNumber}
           </span>
         </div>
 
         {/* Right: USD Official Badge, How to Play & Sound */}
-        <div className="flex items-center gap-1.5 sm:gap-2">
+        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
           {/* USD Currency Badge */}
           <div
-            className="px-2.5 py-1 rounded-lg bg-[#18202d] border border-[#28354c] text-xs font-mono font-bold text-cyan-300 flex items-center gap-1"
+            className="px-2 py-0.5 rounded-lg bg-[#18202d] border border-[#28354c] text-[11px] sm:text-xs font-mono font-bold text-cyan-300 flex items-center gap-1"
           >
             <span>$ USD</span>
           </div>
@@ -483,10 +483,10 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
             id="btn-how-to-play"
             type="button"
             onClick={() => setShowHowToPlay(true)}
-            className="p-1.5 rounded-lg bg-[#18202d] hover:bg-[#222c3e] border border-[#28354c] text-slate-300 hover:text-white transition cursor-pointer flex items-center gap-1 text-xs"
+            className="p-1 sm:px-2 py-0.5 rounded-lg bg-[#18202d] hover:bg-[#222c3e] border border-[#28354c] text-slate-300 hover:text-white transition cursor-pointer flex items-center gap-1 text-[11px]"
           >
-            <HelpCircle className="w-4 h-4 text-amber-400" />
-            <span className="hidden sm:inline">{t('game.howToPlay', 'Como Jogar?')}</span>
+            <HelpCircle className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden xs:inline">{t('game.howToPlay', 'Como Jogar?')}</span>
           </button>
 
           {/* Sound Toggle & Manual Unlock */}
@@ -499,7 +499,7 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
               toggleSound();
             }}
             title={isMuted ? t('game.soundOn', 'Ativar Som') : t('game.soundOff', 'Desativar Som')}
-            className={`px-2.5 py-1 rounded-lg border text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+            className={`px-2 py-0.5 rounded-lg border text-[11px] font-bold transition cursor-pointer flex items-center gap-1 ${
               isMuted
                 ? 'bg-rose-500/10 border-rose-500/40 text-rose-400 hover:bg-rose-500/20'
                 : 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/20'
@@ -507,13 +507,13 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
           >
             {isMuted ? (
               <>
-                <VolumeX className="w-4 h-4 text-rose-400 animate-pulse" />
-                <span>SEM SOM</span>
+                <VolumeX className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
+                <span className="hidden xs:inline">SEM SOM</span>
               </>
             ) : (
               <>
-                <Volume2 className="w-4 h-4 text-emerald-400" />
-                <span>SOM ATIVO</span>
+                <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="hidden xs:inline">SOM</span>
               </>
             )}
           </button>
@@ -524,17 +524,17 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
               id="btn-add-second-bet"
               type="button"
               onClick={() => setShowSecondPanel(true)}
-              className="px-2.5 py-1 rounded-lg bg-[#1a2538] hover:bg-[#233148] border border-cyan-500/40 text-cyan-300 hover:text-cyan-200 text-xs font-bold transition cursor-pointer flex items-center gap-1"
+              className="px-2 py-0.5 rounded-lg bg-[#1a2538] hover:bg-[#233148] border border-cyan-500/40 text-cyan-300 hover:text-cyan-200 text-[11px] font-bold transition cursor-pointer flex items-center gap-1"
             >
-              <PlusCircle className="w-3.5 h-3.5" />
-              <span>{t('game.addPanel', '+ 2ª Aposta')}</span>
+              <PlusCircle className="w-3 h-3" />
+              <span>{t('game.addPanel', '+2ª Aposta')}</span>
             </button>
           )}
         </div>
       </div>
 
       {/* Main Aviator Frame: Grid (Left Sidebar + Center Canvas & Bet Panels) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-2 sm:gap-2.5 items-start">
         {/* Left Column: Tabbed Bets (Todas | Minhas | Top) - Col 4 on Desktop */}
         <div className="lg:col-span-4 order-2 lg:order-1">
           <LiveBetsList
@@ -547,15 +547,15 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
         {/* Right / Center Main Game Console - Col 8 on Desktop */}
         <div className="lg:col-span-8 order-1 lg:order-2 flex flex-col gap-2">
           {/* Framed Canvas Container with Integrated Top History Ribbon */}
-          <div className="relative w-full rounded-2xl overflow-hidden border border-[#263143] bg-[#0b0e14] shadow-2xl flex flex-col">
+          <div className="relative w-full rounded-xl sm:rounded-2xl overflow-hidden border border-[#263143] bg-[#0b0e14] shadow-2xl flex flex-col">
             {/* Top Multiplier History Bar */}
             <RoundHistory
               rounds={pastRounds}
               onSelectRound={(round) => setSelectedFairnessRound(round)}
             />
 
-            {/* Well-proportioned flight viewport (clean Bantu Bet ratio, never overflowing) */}
-            <div className="relative w-full h-[260px] sm:h-[330px] lg:h-[360px] overflow-hidden bg-gradient-to-b from-[#0e131d] via-[#090c12] to-[#05070a]">
+            {/* Responsive flight viewport (never black or overflowing on Infinix mobile) */}
+            <div className="relative w-full h-[220px] xs:h-[250px] sm:h-[320px] lg:h-[360px] min-h-[200px] overflow-hidden bg-gradient-to-b from-[#0e131d] via-[#090c12] to-[#05070a]">
               {/* Three.js Canvas */}
               <SkybirdCanvas
                 status={currentRound.status}

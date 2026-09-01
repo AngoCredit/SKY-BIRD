@@ -157,22 +157,22 @@ export const BettingPanel: React.FC<BettingPanelProps> = ({
       </div>
 
       {/* Main Controls Grid: Left Inputs & Right Huge Aviator Button */}
-      <div className="grid grid-cols-12 gap-2 items-center">
+      <div className="grid grid-cols-12 gap-1.5 sm:gap-2 items-center">
         {/* Left Inputs Section (Col 7 on desktop) */}
-        <div className="col-span-7 sm:col-span-7 flex flex-col gap-1.5">
+        <div className="col-span-7 sm:col-span-7 flex flex-col gap-1 sm:gap-1.5">
           {/* Stepper Input */}
-          <div className="flex items-center bg-[#0b0e14] border border-[#222a3a] rounded-lg p-1">
+          <div className="flex items-center bg-[#0b0e14] border border-[#222a3a] rounded-lg p-0.5 sm:p-1">
             <button
               type="button"
               onClick={() => handleIncrement(-1)}
               disabled={isInputDisabled}
-              className="w-8 h-8 flex items-center justify-center rounded bg-[#18202d] hover:bg-[#222c3e] text-slate-300 hover:text-white font-bold transition disabled:opacity-40 cursor-pointer"
+              className="w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center rounded bg-[#18202d] hover:bg-[#222c3e] text-slate-300 hover:text-white font-bold transition disabled:opacity-40 cursor-pointer"
             >
-              <Minus className="w-3.5 h-3.5" />
+              <Minus className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
             </button>
 
-            <div className="flex-1 flex items-center justify-center px-2">
-              <span className="text-slate-400 font-bold mr-1 text-sm font-sans">
+            <div className="flex-1 flex items-center justify-center px-1 sm:px-2">
+              <span className="text-slate-400 font-bold mr-0.5 sm:mr-1 text-xs sm:text-sm font-sans">
                 {currencySymbol}
               </span>
               <input
@@ -187,7 +187,7 @@ export const BettingPanel: React.FC<BettingPanelProps> = ({
                   const val = parseFloat(rawInput);
                   if (isNaN(val) || val < 0.50) setRawInput('0.50');
                 }}
-                className="w-full bg-transparent text-center font-mono font-bold text-sm sm:text-base text-white outline-none disabled:opacity-50"
+                className="w-full bg-transparent text-center font-mono font-bold text-xs sm:text-base text-white outline-none disabled:opacity-50"
               />
             </div>
 
@@ -195,21 +195,21 @@ export const BettingPanel: React.FC<BettingPanelProps> = ({
               type="button"
               onClick={() => handleIncrement(1)}
               disabled={isInputDisabled}
-              className="w-8 h-8 flex items-center justify-center rounded bg-[#18202d] hover:bg-[#222c3e] text-slate-300 hover:text-white font-bold transition disabled:opacity-40 cursor-pointer"
+              className="w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center rounded bg-[#18202d] hover:bg-[#222c3e] text-slate-300 hover:text-white font-bold transition disabled:opacity-40 cursor-pointer"
             >
-              <Plus className="w-3.5 h-3.5" />
+              <Plus className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
             </button>
           </div>
 
-          {/* Quick Preset Buttons (Bantu Bet Aviator style) */}
-          <div className="grid grid-cols-5 gap-1">
+          {/* Quick Preset Buttons (Optimized for small mobile displays) */}
+          <div className="grid grid-cols-5 gap-0.5 sm:gap-1">
             {quickAmounts.map((amt) => (
               <button
                 key={amt}
                 type="button"
                 onClick={() => handleQuickSelect(amt)}
                 disabled={isInputDisabled}
-                className={`py-1 rounded bg-[#0e1219] hover:bg-[#1b2332] border text-[11px] font-mono font-bold transition disabled:opacity-40 cursor-pointer text-center ${
+                className={`py-0.5 sm:py-1 rounded bg-[#0e1219] hover:bg-[#1b2332] border text-[10px] sm:text-[11px] font-mono font-bold transition disabled:opacity-40 cursor-pointer text-center ${
                   inputAmount === amt
                     ? 'border-cyan-500/60 text-cyan-300 bg-[#162232]'
                     : 'border-[#202837] text-slate-400 hover:text-slate-200'
