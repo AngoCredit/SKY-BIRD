@@ -1,0 +1,6 @@
+{
+  "name": "SKYBIRD - 3D Crash Game Platform",
+  "description": "Modern, cinematic 3D crash game web platform with dynamic flight physics, progressive altitude atmospheres, provably fair engine, wallet, support chat, and full admin dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
