@@ -370,6 +370,7 @@ export const SkybirdCanvas: React.FC<SkybirdCanvasProps> = React.memo(({
     let jetSpawnTimer = 0;
     let lightningTimer = 0;
     let isFlapPeak = false; // Prevents audio thrashing across consecutive frames
+    let lastStatus: GameRoundStatus = status;
 
     // Frame-rate independent exponential dampening helper
     // Guarantees identical smooth motion at 30, 60, 120, 144+ FPS
@@ -380,6 +381,48 @@ export const SkybirdCanvas: React.FC<SkybirdCanvasProps> = React.memo(({
     const tempFogColor = new THREE.Color();
     const tempBgColor = new THREE.Color();
 
+    const resetRoundScene = () => {
+      flightY = 0;
+      cameraShakeIntensity = 0;
+      jetSpawnTimer = 0;
+      lightningTimer = 0;
+      isFlapPeak = false;
+
+      // Reset bird transform immediately to origin (prevents camera plunging into black fog)
+      birdGroup.position.set(0, 0, 0);
+      birdGroup.rotation.set(0, 0, 0);
+      leftWingGroup.rotation.set(0, 0, 0);
+      rightWingGroup.rotation.set(0, 0, 0);
+
+      // Reset camera
+      camera.position.set(0, 3, 12);
+      camera.fov = 55;
+      camera.updateProjectionMatrix();
+
+      // Reset thruster flames
+      flameL.scale.set(0.6, 0.6, 0.6);
+      flameR.scale.set(0.6, 0.6, 0.6);
+      flameMat.color.setHex(0x06b6d4);
+
+      // Hide exploding debris and extra jet aircraft
+      debrisPieces.forEach((p) => {
+        p.mesh.visible = false;
+      });
+      aircraftGroup.visible = false;
+
+      // Immediately reset sky and fog to Stage 1 (Blue Sky)
+      const skyFogColor = new THREE.Color(0x0c4a6e);
+      const skyBgColor = new THREE.Color(0x075985);
+      if (scene.fog) {
+        scene.fog.color.copy(skyFogColor);
+      }
+      scene.background = skyBgColor;
+      ambientLight.color.setHex(0x38bdf8);
+      sunLight.color.setHex(0x38bdf8);
+      rainMat.opacity = 0;
+      starMat.opacity = 0.1;
+    };
+
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate);
 
@@ -388,6 +431,14 @@ export const SkybirdCanvas: React.FC<SkybirdCanvasProps> = React.memo(({
         const delta = Math.min(clock.getDelta(), 0.05);
         const elapsedTime = clock.getElapsedTime();
         const { status: curStatus, multiplier: curMult, altitudeStage: curStage } = stateRef.current;
+
+        // Reset scene state immediately whenever transitioning to a new round (prevents black screen lerp bug)
+        if (curStatus !== lastStatus) {
+          if (curStatus === 'COUNTDOWN' || curStatus === 'WAITING' || (lastStatus === 'CRASHED' && curStatus === 'RUNNING')) {
+            resetRoundScene();
+          }
+          lastStatus = curStatus;
+        }
 
         // 1. Flight Speed & Velocity scaling
         let flightSpeed = 0.5;
@@ -484,12 +535,15 @@ export const SkybirdCanvas: React.FC<SkybirdCanvasProps> = React.memo(({
         }
 
         // 3. Sky & Atmosphere Transitions based on Altitude Stage
-        let targetFogColor = 0x050b18;
-        let targetBgColor = 0x030712;
+        // Force STAGE_1_BLUE_SKY during COUNTDOWN & WAITING so initial sky is always bright blue
+        const effectiveStage = (curStatus === 'COUNTDOWN' || curStatus === 'WAITING') ? 'STAGE_1_BLUE_SKY' : curStage;
+
+        let targetFogColor = 0x0c4a6e;
+        let targetBgColor = 0x075985;
         let rainAlpha = 0;
         let starsAlpha = 0.1;
 
-        switch (curStage) {
+        switch (effectiveStage) {
           case 'STAGE_1_BLUE_SKY':
             targetFogColor = 0x0c4a6e;
             targetBgColor = 0x075985;

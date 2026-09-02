@@ -33,12 +33,18 @@ ALTER TABLE public.game_rounds
   CHECK (status IN ('WAITING', 'COUNTDOWN', 'RUNNING', 'CRASHED', 'SETTLED'));
 
 -- 3. RPC PLACE_BET ATÓMICA E AUTORITÁRIA NO POSTGRESQL
+DROP FUNCTION IF EXISTS public.place_bet(UUID, NUMERIC, INT, NUMERIC);
+DROP FUNCTION IF EXISTS public.place_bet(TEXT, NUMERIC, INT, NUMERIC, TEXT);
+DROP FUNCTION IF EXISTS public.place_bet(TEXT, NUMERIC, INT, NUMERIC, TEXT, TEXT);
+DROP FUNCTION IF EXISTS public.place_bet;
+
 CREATE OR REPLACE FUNCTION public.place_bet(
   p_round_id TEXT,
   p_amount NUMERIC,
   p_panel_id INT DEFAULT 1,
   p_auto_cashout NUMERIC DEFAULT NULL,
-  p_idempotency_key TEXT DEFAULT NULL
+  p_idempotency_key TEXT DEFAULT NULL,
+  p_user_id TEXT DEFAULT NULL
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -55,8 +61,16 @@ DECLARE
   v_existing_response JSONB;
   v_idempotency_str TEXT;
 BEGIN
-  -- 1. Obter utilizador autenticado
+  -- 1. Obter utilizador autenticado (ou p_user_id de sessão activa)
   v_user_id := auth.uid();
+  IF v_user_id IS NULL AND p_user_id IS NOT NULL AND TRIM(p_user_id) <> '' AND p_user_id <> 'usr_guest' THEN
+    BEGIN
+      v_user_id := p_user_id::UUID;
+    EXCEPTION WHEN OTHERS THEN
+      v_user_id := NULL;
+    END;
+  END IF;
+
   IF v_user_id IS NULL THEN
     RAISE EXCEPTION 'UNAUTHORIZED: Utilizador não autenticado.';
   END IF;
@@ -79,7 +93,19 @@ BEGIN
   END IF;
 
   -- 4. Extrair número da rodada e verificar/bloquear estado (compatível com IDs text, uuid e round_number)
-  v_round_number := COALESCE(NULLIF(regexp_replace(p_round_id, '\D', '', 'g'), '')::INT, 1000);
+  IF p_round_id ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' THEN
+    BEGIN
+      v_round_number := (RIGHT(p_round_id, 12))::INT;
+    EXCEPTION WHEN OTHERS THEN
+      v_round_number := 1000;
+    END;
+  ELSE
+    BEGIN
+      v_round_number := COALESCE(NULLIF(regexp_replace(p_round_id, '\D', '', 'g'), '')::INT, 1000);
+    EXCEPTION WHEN OTHERS THEN
+      v_round_number := 1000;
+    END;
+  END IF;
 
   SELECT status, round_number INTO v_round_status, v_round_number
   FROM public.game_rounds
@@ -125,7 +151,19 @@ BEGIN
   FOR UPDATE;
 
   IF v_wallet_balance IS NULL THEN
-    RAISE EXCEPTION 'WALLET_NOT_FOUND: Carteira do utilizador não encontrada.';
+    -- Garantir criação de carteira se não existir no Supabase
+    INSERT INTO public.wallets (user_id, available_balance, locked_balance, currency)
+    VALUES (v_user_id, 0.00, 0.00, 'USD')
+    ON CONFLICT (user_id) DO NOTHING;
+
+    SELECT available_balance INTO v_wallet_balance
+    FROM public.wallets
+    WHERE user_id = v_user_id
+    FOR UPDATE;
+
+    IF v_wallet_balance IS NULL THEN
+      v_wallet_balance := 0.00;
+    END IF;
   END IF;
 
   IF v_wallet_balance < p_amount THEN

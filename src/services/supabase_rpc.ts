@@ -9,6 +9,17 @@
  */
 
 import { supabase, isSupabaseConfigured } from './supabase';
+import { store } from './store';
+
+// Helper: Converte qualquer ID de rodada ou número em um UUID válido RFC-4122 determinístico
+export function toValidUuid(idOrNumber: string | number): string {
+  const str = String(idOrNumber || '');
+  if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(str)) {
+    return str;
+  }
+  const num = parseInt(str.replace(/\D/g, ''), 10) || 1000;
+  return `00000000-0000-4000-8000-${num.toString().padStart(12, '0')}`;
+}
 
 // ─────────────────────────────────────────────────────────
 // TIPOS DE RETORNO DAS RPCs
@@ -108,33 +119,65 @@ export async function serverPlaceBet(params: {
   _pendingBets.set(lockKey, true);
 
   try {
+    const currentUserId = store.getCurrentUser()?.id;
+    const currentWallet = currentUserId ? store.getWallet(currentUserId) : null;
+
     let { data, error } = await supabase.rpc('place_bet', {
       p_amount:          params.amount,
       p_auto_cashout:    params.autoCashout ?? null,
       p_panel_id:        params.panelId ?? 1,
       p_round_id:        params.roundId,
-      p_idempotency_key: dbIdempotencyKey
+      p_idempotency_key: dbIdempotencyKey,
+      p_user_id:         currentUserId && currentUserId !== 'usr_guest' ? currentUserId : null
     });
 
-    // Se o banco de dados Supabase ainda não tiver a nova assinatura com p_idempotency_key, tentar a assinatura de 4 parâmetros
+    // Se o banco de dados Supabase ainda não tiver a nova assinatura com 6 parâmetros, tentar a assinatura de 5 parâmetros
     if (error && error.message.includes('Could not find the function')) {
-      const retry = await supabase.rpc('place_bet', {
-        p_round_id:     params.roundId,
-        p_amount:       params.amount,
-        p_panel_id:     params.panelId ?? 1,
-        p_auto_cashout: params.autoCashout ?? null
+      const retry5 = await supabase.rpc('place_bet', {
+        p_round_id:        params.roundId,
+        p_amount:          params.amount,
+        p_panel_id:        params.panelId ?? 1,
+        p_auto_cashout:    params.autoCashout ?? null,
+        p_idempotency_key: dbIdempotencyKey
       });
-      if (!retry.error) {
-        data = retry.data;
+      if (!retry5.error) {
+        data = retry5.data;
         error = null;
       } else {
-        // Se ainda falhar, tentar com 2 parâmetros simples
-        const retry2 = await supabase.rpc('place_bet', {
-          p_amount:   params.amount,
-          p_round_id: params.roundId
+        // Se ainda falhar, tentar com 4 parâmetros
+        const retry4 = await supabase.rpc('place_bet', {
+          p_round_id:     params.roundId,
+          p_amount:       params.amount,
+          p_panel_id:     params.panelId ?? 1,
+          p_auto_cashout: params.autoCashout ?? null
         });
-        data = retry2.data;
-        error = retry2.error;
+        data = retry4.data;
+        error = retry4.error;
+      }
+    }
+
+    // Se falhar devido a wallet não encontrada ou saldo insuficiente mas o utilizador tem saldo aprovado localmente, sincronizar wallet no Supabase
+    if (error && (error.message.includes('WALLET_NOT_FOUND') || error.message.includes('INSUFFICIENT_FUNDS')) && currentUserId && currentUserId !== 'usr_guest' && currentWallet && currentWallet.availableBalance >= params.amount) {
+      console.log('[RPC] Auto-sincronizando wallet do utilizador no Supabase:', currentUserId, 'Saldo:', currentWallet.availableBalance);
+      await supabase.from('wallets').upsert({
+        user_id: currentUserId,
+        available_balance: currentWallet.availableBalance,
+        locked_balance: 0,
+        currency: 'USD',
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'user_id' }).then(null, () => null);
+
+      const retryWallet = await supabase.rpc('place_bet', {
+        p_amount:          params.amount,
+        p_auto_cashout:    params.autoCashout ?? null,
+        p_panel_id:        params.panelId ?? 1,
+        p_round_id:        params.roundId,
+        p_idempotency_key: dbIdempotencyKey,
+        p_user_id:         currentUserId
+      });
+      if (!retryWallet.error) {
+        data = retryWallet.data;
+        error = null;
       }
     }
 
@@ -149,10 +192,11 @@ export async function serverPlaceBet(params: {
     if (isRoundNotFound) {
       // Auto-criar a rodada na tabela game_rounds do Supabase e tentar novamente
       const rNum = Number(params.roundId.replace(/\D/g, '')) || 1000;
+      const validUuid = toValidUuid(params.roundId);
 
-      // 1. Tentar upsert com id de texto
+      // 1. Tentar upsert com id UUID válido
       await supabase.from('game_rounds').upsert({
-        id: params.roundId,
+        id: validUuid,
         round_number: rNum,
         status: 'COUNTDOWN',
         server_seed_hash: 'skybird_auto_hash',
@@ -173,8 +217,9 @@ export async function serverPlaceBet(params: {
         p_amount:          params.amount,
         p_auto_cashout:    params.autoCashout ?? null,
         p_panel_id:        params.panelId ?? 1,
-        p_round_id:        params.roundId,
-        p_idempotency_key: dbIdempotencyKey
+        p_round_id:        validUuid,
+        p_idempotency_key: dbIdempotencyKey,
+        p_user_id:         currentUserId && currentUserId !== 'usr_guest' ? currentUserId : null
       });
 
       if (!retryRound.error) {
@@ -187,7 +232,8 @@ export async function serverPlaceBet(params: {
           p_auto_cashout:    params.autoCashout ?? null,
           p_panel_id:        params.panelId ?? 1,
           p_round_id:        String(rNum),
-          p_idempotency_key: dbIdempotencyKey
+          p_idempotency_key: dbIdempotencyKey,
+          p_user_id:         currentUserId && currentUserId !== 'usr_guest' ? currentUserId : null
         });
         if (!retryNumStr.error) {
           data = retryNumStr.data;

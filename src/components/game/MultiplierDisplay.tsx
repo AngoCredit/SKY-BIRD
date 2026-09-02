@@ -75,7 +75,7 @@ export const MultiplierDisplay: React.FC<MultiplierDisplayProps> = ({
             <div className="w-48 sm:w-60 h-2 bg-[#171d2a] rounded-full overflow-hidden border border-[#263348] p-0.5">
               <div
                 className="h-full bg-gradient-to-r from-red-600 via-rose-500 to-amber-400 rounded-full transition-all duration-300"
-                style={{ width: `${((3 - countdown) / 3) * 100}%` }}
+                style={{ width: `${Math.min(100, Math.max(0, ((5 - countdown) / 5) * 100))}%` }}
               />
             </div>
           </div>

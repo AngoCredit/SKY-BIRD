@@ -23,6 +23,7 @@ import { generateRandomSeed, hashServerSeed, calculateCrashPoint } from './prova
 import { audioManager } from './audioManager';
 import { supabase, isSupabaseConfigured } from './supabase';
 import {
+  toValidUuid,
   serverPlaceBet,
   serverCashoutBet,
   subscribeToWalletChanges,
@@ -93,6 +94,9 @@ class SkybirdStore {
   private userBetHistory: Bet[] = [];
   private lastSyncSeq: number = -1;
   private lastSyncAccumulated: number = 0;
+  // Cache de estado sincronizado: evita recalcular o crash point a cada frame (80ms TTL)
+  private syncStateCache: { result: ReturnType<SkybirdStore['getSynchronizedRoundState']>; ts: number } | null = null;
+  private readonly SYNC_CACHE_TTL_MS = 80;
 
   private notifications: SystemNotification[] = [];
   private conversations: SupportConversation[] = [];
@@ -1589,6 +1593,13 @@ class SkybirdStore {
     clientSeed: string;
   } {
     const now = Date.now();
+
+    // PERFORMANCE: Retorna resultado em cache se chamado dentro do mesmo intervalo de 80ms.
+    // Elimina recálculo do crash point (loop criptográfico) a cada frame da animação.
+    if (this.syncStateCache && (now - this.syncStateCache.ts) < this.SYNC_CACHE_TTL_MS) {
+      return this.syncStateCache.result;
+    }
+
     const COUNTDOWN_MS = 5000;       // 5s de contagem regressiva
     const CRASHED_DISPLAY_MS = 5000; // 5s de display do crash antes de nova rodada
     const MIN_FLIGHT_MS = 3000;      // mínimo 3s de voo sempre visível
@@ -1658,7 +1669,7 @@ class SkybirdStore {
           }
         }
 
-        return {
+        const result = {
           roundNumber: rNum,
           status,
           startedAt: runningStartTime,
@@ -1669,6 +1680,8 @@ class SkybirdStore {
           serverSeed: seed,
           clientSeed
         };
+        this.syncStateCache = { result, ts: now };
+        return result;
       }
       accumulated += cycleDuration;
       roundSeq++;
@@ -1678,9 +1691,9 @@ class SkybirdStore {
     // Fallback seguro (nunca deve chegar aqui em operação normal)
     const fbNum = 1000 + (roundSeq % 90000);
     const fbSeed = `skybird_prod_seed_rnd_${fbNum}_master`;
-    return {
+    const fbResult = {
       roundNumber: fbNum,
-      status: 'COUNTDOWN',
+      status: 'COUNTDOWN' as GameRoundStatus,
       startedAt: now,
       countdownRemaining: 5,
       currentMultiplier: 1.00,
@@ -1689,6 +1702,8 @@ class SkybirdStore {
       serverSeed: fbSeed,
       clientSeed
     };
+    this.syncStateCache = { result: fbResult, ts: now };
+    return fbResult;
   }
 
   public getCurrentRound(): GameRound {
@@ -1728,8 +1743,9 @@ class SkybirdStore {
 
       // Auto-sincronizar rodada com a tabela game_rounds do Supabase para garantir que place_bet não falhe
       if (isSupabaseConfigured) {
+        const validUuid = toValidUuid(this.currentRound.id);
         supabase.from('game_rounds').upsert({
-          id: this.currentRound.id,
+          id: validUuid,
           round_number: syncState.roundNumber,
           status: syncState.status,
           crash_point: syncState.crashPoint,
@@ -1737,7 +1753,17 @@ class SkybirdStore {
           client_seed: syncState.clientSeed,
           started_at: new Date(syncState.startedAt).toISOString()
         }, { onConflict: 'id' }).then(({ error }) => {
-          if (error) console.warn('[Supabase] Erro ao sincronizar game_round:', error.message);
+          if (error) {
+            // Fallback para upsert com round_number
+            supabase.from('game_rounds').upsert({
+              round_number: syncState.roundNumber,
+              status: syncState.status,
+              crash_point: syncState.crashPoint,
+              server_seed_hash: syncState.serverSeedHash,
+              client_seed: syncState.clientSeed,
+              started_at: new Date(syncState.startedAt).toISOString()
+            }, { onConflict: 'round_number' }).then(null, () => null);
+          }
         });
       }
 

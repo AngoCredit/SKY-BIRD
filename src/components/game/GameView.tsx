@@ -163,7 +163,9 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
     return 'STAGE_6_COSMIC_SPACE';
   };
 
-  const altitudeStage = getAltitudeStage(multiplier);
+  const altitudeStage = (currentRound.status === 'COUNTDOWN' || currentRound.status === 'WAITING')
+    ? 'STAGE_1_BLUE_SKY'
+    : getAltitudeStage(multiplier);
 
   // Handle cashout action for Panel 1 or Panel 2
   const handleCashOut = useCallback(async (panelId: number = 1) => {
@@ -348,29 +350,67 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
   }, [currentUser.id, currency, showSecondPanel, queuedBet1, queuedBet2, handlePlaceBet]);
 
   // Main Game Loop (Global Realtime Epoch Sync)
+  // PERFORMANCE: getSynchronizedRoundState() e getCurrentRound() são funções pesadas
+  // (cálculo criptográfico + loops). Throttle para máx 10x/seg (100ms).
+  // Auto-cashout continua a 60fps usando refs leves (sem re-render React).
+  const lastStateTickRef = useRef<number>(0);
+  const lastSyncStateRef = useRef<ReturnType<typeof store.getSynchronizedRoundState> | null>(null);
+
   useEffect(() => {
     let loopId: number;
 
-    const gameLoop = () => {
+    const gameLoop = (timestamp: number) => {
+      const TICK_INTERVAL_MS = 100; // Throttle estado pesado a 10x/seg
+
+      // ── AUTO-CASHOUT a 60fps (usa apenas refs, zero cálculo pesado) ──────────
+      const curMult = multiplierRef.current;
+      if (currentRoundRef.current.status === 'RUNNING') {
+        if (
+          hasActiveBet1Ref.current &&
+          !hasCashedOut1Ref.current &&
+          autoCashOutEnabled1Ref.current &&
+          curMult >= autoCashOutMultiplier1Ref.current
+        ) {
+          handleCashOut(1);
+        }
+        if (
+          hasActiveBet2Ref.current &&
+          !hasCashedOut2Ref.current &&
+          autoCashOutEnabled2Ref.current &&
+          curMult >= autoCashOutMultiplier2Ref.current
+        ) {
+          handleCashOut(2);
+        }
+      }
+
+      // ── ESTADO DO JOGO throttlado a 10x/seg ─────────────────────────────────
+      if (timestamp - lastStateTickRef.current < TICK_INTERVAL_MS) {
+        loopId = requestAnimationFrame(gameLoop);
+        return;
+      }
+      lastStateTickRef.current = timestamp;
+
       const syncState = store.getSynchronizedRoundState();
+      lastSyncStateRef.current = syncState;
       const activeRound = store.getCurrentRound();
 
       if (syncState.status === 'COUNTDOWN') {
-        // Trigger auto/queued bets exactly once per round — not every RAF frame
+        // Trigger auto/queued bets exatamente uma vez por rodada
         if (syncState.roundNumber !== lastAutoBetRoundRef.current) {
           lastAutoBetRoundRef.current = syncState.roundNumber;
           triggerAutoBets();
         }
-        
-        // Trigger professional countdown sound per second tick
+
+        // Som de countdown por segundo (sem disparar no mesmo segundo)
         if (syncState.countdownRemaining !== lastCountdownSecRef.current) {
           lastCountdownSecRef.current = syncState.countdownRemaining;
           try { audioManager.playCountdown(syncState.countdownRemaining === 0); } catch {}
         }
         setCountdown(syncState.countdownRemaining);
 
-        if (currentRoundRef.current.roundNumber !== syncState.roundNumber) {
+        if (currentRoundRef.current.roundNumber !== syncState.roundNumber || currentRoundRef.current.status !== 'COUNTDOWN') {
           setCurrentRound(activeRound);
+          currentRoundRef.current = activeRound;
           setMultiplier(1.00);
           multiplierRef.current = 1.00;
 
@@ -407,26 +447,6 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
         const stage = getAltitudeStage(calculatedMult);
         try { audioManager.updateFlightIntensity(calculatedMult, stage); } catch {}
         store.triggerBotCashouts(calculatedMult);
-
-        // Auto Cashout check Panel 1
-        if (
-          hasActiveBet1Ref.current &&
-          !hasCashedOut1Ref.current &&
-          autoCashOutEnabled1Ref.current &&
-          calculatedMult >= autoCashOutMultiplier1Ref.current
-        ) {
-          handleCashOut(1);
-        }
-
-        // Auto Cashout check Panel 2
-        if (
-          hasActiveBet2Ref.current &&
-          !hasCashedOut2Ref.current &&
-          autoCashOutEnabled2Ref.current &&
-          calculatedMult >= autoCashOutMultiplier2Ref.current
-        ) {
-          handleCashOut(2);
-        }
       } else if (syncState.status === 'CRASHED') {
         const finalPoint = syncState.crashPoint;
         setMultiplier(finalPoint);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ShieldAlert,
   Users,
@@ -30,7 +30,8 @@ import {
   Music,
   Play,
   Square,
-  Sparkles
+  Sparkles,
+  Upload
 } from 'lucide-react';
 import { store } from '../../services/store';
 import { supabase, isSupabaseConfigured } from '../../services/supabase';
@@ -96,11 +97,56 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(audioManager.getConfig().muted);
   const [playingPreviewEvent, setPlayingPreviewEvent] = useState<string | null>(null);
 
+  // Audio File Upload Refs & Handlers
+  const bgMusicFileRef = useRef<HTMLInputElement>(null);
+  const sfxFileRefs = useRef<Record<string, HTMLInputElement | null>>({});
+
   // Admin toast helper
   const showAdminToast = (title: string, message: string) => {
     setAdminToast({ title, message });
     audioManager.playNotification();
     setTimeout(() => setAdminToast(null), 6000);
+  };
+
+  const handleBgMusicUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 20 * 1024 * 1024) {
+      showAdminToast('⚠️ Ficheiro muito grande', 'A música de fundo deve ter no máximo 20 MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const result = evt.target?.result as string;
+      if (result) {
+        setBgMusicUrlInput(result);
+        audioManager.setBackgroundMusicUrl(result);
+        showAdminToast('🎵 Música Carregada!', `Ficheiro "${file.name}" carregado com sucesso.`);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSfxFileUpload = (sfxKey: string, sfxLabel: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 15 * 1024 * 1024) {
+      showAdminToast('⚠️ Ficheiro muito grande', 'O efeito sonoro deve ter no máximo 15 MB.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const result = evt.target?.result as string;
+      if (result) {
+        setCustomSfxUrls((prev) => {
+          const updated = { ...prev, [sfxKey]: result };
+          audioManager.setCustomSfxUrl(sfxKey, result);
+          return updated;
+        });
+        showAdminToast('🔊 Efeito Sonoro Carregado!', `Áudio personalizado para "${sfxLabel}" carregado com sucesso.`);
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   // Realtime Supabase listener for Admin — direct channel subscriptions
@@ -498,11 +544,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <div className="flex items-center gap-2">
                       <Gamepad2 className="w-4 h-4 text-cyan-400" />
                       <span className="font-bold text-white">Rodada #{r.roundNumber}</span>
-                      <span className="text-slate-500 font-mono">({r.crashPoint.toFixed(2)}x)</span>
+                      <span className="text-slate-500 font-mono">({(r.crashPoint ?? 0).toFixed(2)}x)</span>
                     </div>
                     <div className="flex items-center gap-4">
-                      <span className="text-slate-400">Volume: ${r.totalBetsAmount.toFixed(2)}</span>
-                      <span className="text-emerald-400 font-mono font-bold">Payout: ${r.totalPayoutAmount.toFixed(2)}</span>
+                      <span className="text-slate-400">Volume: ${(r.totalBetsAmount ?? 0).toFixed(2)}</span>
+                      <span className="text-emerald-400 font-mono font-bold">Payout: ${(r.totalPayoutAmount ?? 0).toFixed(2)}</span>
                     </div>
                   </div>
                 ))}
@@ -567,7 +613,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               )}
                             </td>
                             <td className="py-3 font-mono text-emerald-400 font-bold">
-                              ${wallet.availableBalance.toFixed(2)} USD
+                              ${(wallet.availableBalance ?? 0).toFixed(2)} USD
                             </td>
                             <td className="py-3">
                               <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-mono ${
@@ -833,9 +879,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   {rounds.map((r) => (
                     <tr key={r.id} className="hover:bg-slate-800/30">
                       <td className="py-3 font-bold text-white">#{r.roundNumber}</td>
-                      <td className="py-3 text-emerald-400 font-bold">{r.crashPoint.toFixed(2)}x</td>
+                      <td className="py-3 text-emerald-400 font-bold">{(r.crashPoint ?? 0).toFixed(2)}x</td>
                       <td className="py-3 text-slate-400 text-[10px] truncate max-w-xs">{r.serverSeedHash}</td>
-                      <td className="py-3 text-slate-300">${r.totalBetsAmount.toFixed(2)}</td>
+                      <td className="py-3 text-slate-300">${(r.totalBetsAmount ?? 0).toFixed(2)}</td>
                       <td className="py-3 text-right">
                         <span className="px-2 py-0.5 rounded bg-slate-900 text-slate-400 text-[10px] font-sans">
                           {r.status}
@@ -892,7 +938,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             >
                               {pendingTx.type === 'deposit' ? 'Depósito' : 'Saque'}
                             </span>
-                            <span className="font-mono text-white font-bold">${pendingTx.amount.toFixed(2)} USD</span>
+                            <span className="font-mono text-white font-bold">${(pendingTx.amount ?? 0).toFixed(2)} USD</span>
                           </div>
                           <span className="text-[10px] text-slate-400 font-mono block mt-1">
                             {pendingTx.reference} {pendingTx.details ? `• ${pendingTx.details}` : ''}
@@ -957,14 +1003,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   {transactions.map((tx) => (
                     <tr key={tx.id} className="hover:bg-slate-800/30">
                       <td className="py-3 text-slate-400">
-                        {new Date(tx.createdAt).toLocaleDateString()} {new Date(tx.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {tx.createdAt ? `${new Date(tx.createdAt).toLocaleDateString()} ${new Date(tx.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '—'}
                       </td>
                       <td className="py-3 uppercase font-bold text-cyan-400">{tx.type}</td>
                       <td className="py-3 text-slate-300 font-sans">{tx.userId}</td>
                       <td className="py-3 text-slate-300 max-w-xs truncate">
                         {tx.reference} {tx.details ? `(${tx.details})` : ''}
                       </td>
-                      <td className="py-3 font-bold text-white">${tx.amount.toFixed(2)} USD</td>
+                      <td className="py-3 font-bold text-white">${(tx.amount ?? 0).toFixed(2)} USD</td>
                       <td className="py-3">
                         <span
                           className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold ${
@@ -1279,14 +1325,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             {/* MÚSICA DE FUNDO PRINCIPAL */}
             <div className="space-y-4 p-5 rounded-2xl bg-slate-950/80 border border-slate-800">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-cyber font-bold text-white uppercase tracking-wider flex items-center gap-2">
                     <Music className="w-4 h-4 text-amber-400" />
                     2. MÚSICA DE FUNDO PRINCIPAL (BACKGROUND TRACK)
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Insira o URL de um ficheiro áudio (MP3, WAV, OGG) ou utilize uma das sugestões abaixo.
+                    Insira o URL de um ficheiro áudio (MP3, WAV, OGG) ou faça o upload direto do seu dispositivo.
                   </p>
                 </div>
                 {bgMusicUrlInput && (
@@ -1302,7 +1348,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         setPlayingPreviewEvent('bg_music');
                       }
                     }}
-                    className="px-3.5 py-1.5 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 hover:bg-amber-500/30 cursor-pointer"
+                    className="px-3.5 py-1.5 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 hover:bg-amber-500/30 cursor-pointer shrink-0"
                   >
                     {playingPreviewEvent === 'bg_music' ? <Square className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
                     <span>{playingPreviewEvent === 'bg_music' ? 'Pausar Teste' : 'Testar Trilha'}</span>
@@ -1310,19 +1356,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 )}
               </div>
 
-              <div className="flex gap-3">
+              <div className="flex flex-col sm:flex-row gap-3">
                 <input
                   type="text"
-                  value={bgMusicUrlInput}
+                  value={bgMusicUrlInput.startsWith('data:audio') ? `[Ficheiro Áudio Carregado — ${(bgMusicUrlInput.length / 1024).toFixed(0)} KB]` : bgMusicUrlInput}
                   onChange={(e) => setBgMusicUrlInput(e.target.value)}
                   placeholder="https://exemplo.com/audio/musica_fundo.mp3 ou /audio/background.mp3"
                   className="flex-1 px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white font-mono focus:border-amber-400 focus:outline-none"
                 />
+                
+                {/* Hidden File Input */}
+                <input
+                  ref={bgMusicFileRef}
+                  type="file"
+                  accept="audio/*"
+                  onChange={handleBgMusicUpload}
+                  className="hidden"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => bgMusicFileRef.current?.click()}
+                  className="px-4 py-2.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition shrink-0"
+                  title="Fazer upload de um ficheiro de áudio (MP3, WAV, OGG)"
+                >
+                  <Upload className="w-4 h-4 text-amber-400" />
+                  <span>Subir Áudio</span>
+                </button>
+
                 {bgMusicUrlInput && (
                   <button
                     type="button"
-                    onClick={() => setBgMusicUrlInput('')}
-                    className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs cursor-pointer"
+                    onClick={() => {
+                      setBgMusicUrlInput('');
+                      audioManager.setBackgroundMusicUrl(null);
+                    }}
+                    className="px-3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs cursor-pointer shrink-0"
                   >
                     Limpar
                   </button>
@@ -1364,7 +1433,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   3. EFEITOS SONOROS DOS EVENTOS DO JOGO (CUSTOM SFX)
                 </h3>
                 <p className="text-xs text-slate-400">
-                  Defina ficheiros de áudio dedicados para as ações do jogo. Se o campo ficar em branco, o efeito sintético procedural será utilizado.
+                  Defina ficheiros de áudio dedicados fazendo upload direto do seu computador ou inserindo a URL. Se em branco, o sintetizador procedural Web Audio será utilizado.
                 </p>
               </div>
 
@@ -1378,45 +1447,100 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   { key: 'deposit', label: '💳 Alerta de Depósito Aprovado', defaultHint: 'Chime futurista de saldo recebido' },
                   { key: 'withdrawal', label: '📤 Alerta de Saque Solicitado', defaultHint: 'Aviso de processamento financeiro' },
                   { key: 'message', label: '💬 Mensagem do Suporte', defaultHint: 'Ping eletrónico de chat' }
-                ].map((sfx) => (
-                  <div key={sfx.key} className="p-3.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-white">{sfx.label}</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const url = customSfxUrls[sfx.key];
-                          if (url) {
-                            audioManager.setCustomSfxUrl(sfx.key, url);
-                            audioManager.playCustomSfx(sfx.key);
-                          } else {
-                            if (sfx.key === 'takeoff') audioManager.playTakeoff();
-                            else if (sfx.key === 'cashout') audioManager.playCashOut();
-                            else if (sfx.key === 'crash') audioManager.playCrash();
-                            else if (sfx.key === 'bird_cry') audioManager.playBirdCry();
-                            else if (sfx.key === 'countdown') audioManager.playCountdown(false);
-                            else if (sfx.key === 'deposit') audioManager.playDepositAlert();
-                            else if (sfx.key === 'withdrawal') audioManager.playWithdrawalAlert();
-                            else if (sfx.key === 'message') audioManager.playMessageAlert();
-                          }
-                        }}
-                        className="px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 text-[11px] font-bold cursor-pointer flex items-center gap-1 border border-cyan-500/30"
-                      >
-                        <Play className="w-3 h-3" /> Testar
-                      </button>
+                ].map((sfx) => {
+                  const hasCustom = Boolean(customSfxUrls[sfx.key] && customSfxUrls[sfx.key].trim());
+                  const isDataUrl = customSfxUrls[sfx.key]?.startsWith('data:audio');
+
+                  return (
+                    <div key={sfx.key} className="p-3.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                          {sfx.label}
+                          {isDataUrl && (
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[9px] font-mono font-bold">
+                              📁 Ficheiro Subido
+                            </span>
+                          )}
+                        </span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const url = customSfxUrls[sfx.key];
+                              if (url) {
+                                audioManager.setCustomSfxUrl(sfx.key, url);
+                                audioManager.playCustomSfx(sfx.key);
+                              } else {
+                                if (sfx.key === 'takeoff') audioManager.playTakeoff();
+                                else if (sfx.key === 'cashout') audioManager.playCashOut();
+                                else if (sfx.key === 'crash') audioManager.playCrash();
+                                else if (sfx.key === 'bird_cry') audioManager.playBirdCry();
+                                else if (sfx.key === 'countdown') audioManager.playCountdown(false);
+                                else if (sfx.key === 'deposit') audioManager.playDepositAlert();
+                                else if (sfx.key === 'withdrawal') audioManager.playWithdrawalAlert();
+                                else if (sfx.key === 'message') audioManager.playMessageAlert();
+                              }
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 text-[11px] font-bold cursor-pointer flex items-center gap-1 border border-cyan-500/30"
+                          >
+                            <Play className="w-3 h-3" /> Testar
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Input row with text / upload button */}
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={isDataUrl ? `[Ficheiro Áudio — ${(customSfxUrls[sfx.key].length / 1024).toFixed(0)} KB]` : customSfxUrls[sfx.key] || ''}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setCustomSfxUrls((prev) => ({ ...prev, [sfx.key]: val }));
+                          }}
+                          placeholder={sfx.defaultHint}
+                          className="flex-1 px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-[11px] text-white font-mono focus:border-cyan-400 focus:outline-none"
+                        />
+
+                        {/* Hidden file input per SFX item */}
+                        <input
+                          ref={(el) => (sfxFileRefs.current[sfx.key] = el)}
+                          type="file"
+                          accept="audio/*"
+                          onChange={(e) => handleSfxFileUpload(sfx.key, sfx.label, e)}
+                          className="hidden"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() => sfxFileRefs.current[sfx.key]?.click()}
+                          className="px-3 py-2 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-[11px] font-bold flex items-center gap-1 cursor-pointer transition shrink-0"
+                          title="Fazer upload de ficheiro MP3/WAV para este efeito sonoro"
+                        >
+                          <Upload className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>Subir</span>
+                        </button>
+
+                        {hasCustom && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCustomSfxUrls((prev) => {
+                                const next = { ...prev };
+                                delete next[sfx.key];
+                                audioManager.setCustomSfxUrl(sfx.key, null);
+                                return next;
+                              });
+                            }}
+                            className="px-2.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-[11px] cursor-pointer shrink-0"
+                            title="Remover áudio customizado"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <input
-                      type="text"
-                      value={customSfxUrls[sfx.key] || ''}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setCustomSfxUrls(prev => ({ ...prev, [sfx.key]: val }));
-                      }}
-                      placeholder={sfx.defaultHint}
-                      className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-[11px] text-white font-mono focus:border-cyan-400 focus:outline-none"
-                    />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 

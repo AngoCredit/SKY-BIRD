@@ -151,8 +151,17 @@ export function App() {
 
       const initAuthSession = async () => {
         try {
-          const { data: { session } } = await supabase.auth.getSession();
-          if (session?.user) {
+          const { data: { session }, error } = await supabase.auth.getSession();
+          if (error) {
+            console.warn('[Supabase Auth Init] Token expirado ou inválido. A limpar sessão local:', error.message);
+            // Limpar tokens do Supabase expirados do localStorage se a sessão for inválida
+            for (let i = 0; i < localStorage.length; i++) {
+              const key = localStorage.key(i);
+              if (key && (key.startsWith('sb-') || key.includes('supabase'))) {
+                localStorage.removeItem(key);
+              }
+            }
+          } else if (session?.user) {
             const u = await syncUserProfile(session.user);
             const hash = window.location.hash.toLowerCase().replace('#', '');
             const savedView = localStorage.getItem('skybird_current_view');
@@ -181,13 +190,14 @@ export function App() {
           const u = await syncUserProfile(session.user);
           if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
             setIsAuthOpen(false);
-            setCurrentView(u.role === 'admin' ? 'admin' : 'game');
+            if (currentView === 'admin-login' && u.role === 'admin') {
+              setCurrentView('admin');
+            }
           }
         } else if (event === 'SIGNED_OUT') {
           store.logout();
           setCurrentView('landing');
         }
-        // Always unblock loading (covers INITIAL_SESSION with no user, PASSWORD_RECOVERY, etc.)
         setIsAuthLoading(false);
       });
 
