@@ -1,899 +1,100 @@
 /**
- * supabase_rpc.ts — Camada de RPC server-side para SKYBIRD
- *
- * REGRA ABSOLUTA:
- *  - place_bet()   → ÚNICO ponto de entrada para apostas reais
- *  - cashout_bet() → ÚNICO ponto de entrada para cashout real
- *  - O frontend NUNCA calcula saldo, payout ou crash_point.
- *  - O frontend apenas envia intenção e recebe o resultado do servidor.
+ * supabase_rpc.ts — acesso exclusivamente às operações server-side.
+ * O browser envia intenção; PostgreSQL/Supabase Auth determina identidade,
+ * saldo, payout, round e resultado financeiro.
  */
-
 import { supabase, isSupabaseConfigured } from './supabase';
-import { store } from './store';
 
-// Helper: Converte qualquer ID de rodada ou número em um UUID válido RFC-4122 determinístico
-export function toValidUuid(idOrNumber: string | number): string {
-  const str = String(idOrNumber || '');
-  if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(str)) {
-    return str;
-  }
-  const num = parseInt(str.replace(/\D/g, ''), 10) || 1000;
-  return `00000000-0000-4000-8000-${num.toString().padStart(12, '0')}`;
+export interface PlaceBetResult { success:boolean; bet_id:string; transaction_id:string; balance_before:number; balance_after:number; round_number:number; panel_id:number; error?:string; }
+export interface CashoutBetResult { success:boolean; payout:number; multiplier:number; balance_after:number; transaction_id:string; bet_id:string; error?:string; }
+export interface CreateRoundResult { success:boolean; round_id:string; round_number:number; server_seed_hash:string; client_seed:string; nonce:number; status:string; error?:string; }
+export interface RevealSeedResult { round_id:string; round_number:number; server_seed:string; server_seed_hash:string; client_seed:string; nonce:number; crash_point:number; status:string; }
+
+const pending = new Set<string>();
+const fail = <T extends object>(base:T,error:string) => ({...base,success:false,error}) as T & {success:false;error:string};
+
+export async function serverPlaceBet(params:{roundId:string;amount:number;panelId?:number;autoCashout?:number|null;idempotencyKey?:string}):Promise<PlaceBetResult>{
+  const base={bet_id:'',transaction_id:'',balance_before:0,balance_after:0,round_number:0,panel_id:params.panelId??1};
+  if(!isSupabaseConfigured)return fail(base,'SUPABASE_NOT_CONFIGURED');
+  const key=params.idempotencyKey||crypto.randomUUID();
+  const lock=`bet:${key}`;
+  if(pending.has(lock))return fail(base,'DOUBLE_SUBMIT');
+  pending.add(lock);
+  try{
+    const {data,error}=await supabase.rpc('place_bet',{p_round_id:params.roundId,p_amount:params.amount,p_panel_id:params.panelId??1,p_auto_cashout:params.autoCashout??null,p_idempotency_key:key});
+    if(error)return fail(base,error.message);
+    return {success:true,bet_id:data.bet_id,transaction_id:data.transaction_id,balance_before:Number(data.balance_before),balance_after:Number(data.balance_after),round_number:Number(data.round_number),panel_id:Number(data.panel_id)};
+  }finally{pending.delete(lock);}
 }
 
-// ─────────────────────────────────────────────────────────
-// TIPOS DE RETORNO DAS RPCs
-// ─────────────────────────────────────────────────────────
-
-export interface PlaceBetResult {
-  success: boolean;
-  bet_id: string;
-  transaction_id: string;
-  balance_before: number;
-  balance_after: number;
-  round_number: number;
-  panel_id: number;
-  error?: string;
+export async function serverCashoutBet(params:{betId:string}):Promise<CashoutBetResult>{
+  const base={payout:0,multiplier:0,balance_after:0,transaction_id:'',bet_id:params.betId};
+  if(!isSupabaseConfigured)return fail(base,'SUPABASE_NOT_CONFIGURED');
+  const lock=`cashout:${params.betId}`;
+  if(pending.has(lock))return fail(base,'DOUBLE_CASHOUT');
+  pending.add(lock);
+  try{
+    const {data,error}=await supabase.rpc('cashout_bet',{p_bet_id:params.betId});
+    if(error)return fail(base,error.message);
+    return {success:true,payout:Number(data.payout),multiplier:Number(data.multiplier),balance_after:Number(data.balance_after),transaction_id:data.transaction_id,bet_id:data.bet_id};
+  }finally{pending.delete(lock);}
 }
 
-export interface CashoutBetResult {
-  success: boolean;
-  payout: number;
-  multiplier: number;
-  balance_after: number;
-  transaction_id: string;
-  bet_id: string;
-  error?: string;
+export async function serverCreateNextRound():Promise<CreateRoundResult>{
+  const base={round_id:'',round_number:0,server_seed_hash:'',client_seed:'',nonce:0,status:''};
+  if(!isSupabaseConfigured)return fail(base,'SUPABASE_NOT_CONFIGURED');
+  const {data,error}=await supabase.rpc('create_next_round');
+  if(error)return fail(base,error.message);
+  return {success:true,round_id:data.round_id,round_number:Number(data.round_number),server_seed_hash:data.server_seed_hash,client_seed:data.client_seed,nonce:Number(data.nonce),status:data.status};
 }
 
-export interface CreateRoundResult {
-  success: boolean;
-  round_id: string;
-  round_number: number;
-  server_seed_hash: string;
-  client_seed: string;
-  nonce: number;
-  status: string;
-  error?: string;
+export async function serverRevealRoundSeed(roundId:string):Promise<RevealSeedResult|null>{
+  if(!isSupabaseConfigured)return null;
+  const {data,error}=await supabase.rpc('reveal_round_seed',{p_round_id:roundId});
+  if(error||!data)return null;
+  return {round_id:data.round_id,round_number:Number(data.round_number),server_seed:data.server_seed,server_seed_hash:data.server_seed_hash,client_seed:data.client_seed,nonce:Number(data.nonce),crash_point:Number(data.crash_point),status:data.status};
 }
 
-export interface RevealSeedResult {
-  round_id: string;
-  round_number: number;
-  server_seed: string;
-  server_seed_hash: string;
-  client_seed: string;
-  nonce: number;
-  crash_point: number;
-  status: string;
+export function subscribeToCurrentRound(onRoundChange:(round:any)=>void){
+  if(!isSupabaseConfigured)return()=>{};
+  const channel=supabase.channel('game_rounds_current').on('postgres_changes',{event:'*',schema:'public',table:'game_rounds'},payload=>{
+    const row:any=payload.new;if(!row)return;
+    onRoundChange({id:row.id,round_number:Number(row.round_number),status:row.status,server_seed_hash:row.server_seed_hash,client_seed:row.client_seed,nonce:Number(row.nonce),crash_point:['CRASHED','SETTLED'].includes(row.status)?Number(row.crash_point):undefined,started_at:row.started_at,ended_at:row.ended_at,total_bets_amount:Number(row.total_bets_amount??0),total_payout_amount:Number(row.total_payout_amount??0)});
+  }).subscribe();
+  return()=>{void supabase.removeChannel(channel);};
 }
 
-// ─────────────────────────────────────────────────────────
-// Vigilância de chamadas em andamento — Proteção Idempotência
-// Impede double-click e retry concorrente para o mesmo painel
-// ─────────────────────────────────────────────────────────
-const _pendingBets: Map<string, true> = new Map();
-const _pendingCashouts: Map<string, true> = new Map();
-
-// ─────────────────────────────────────────────────────────
-// place_bet — Aposta atómica via RPC server-side
-// ─────────────────────────────────────────────────────────
-
-export async function serverPlaceBet(params: {
-  roundId: string;
-  amount: number;
-  panelId?: number;
-  autoCashout?: number | null;
-  idempotencyKey?: string;
-}): Promise<PlaceBetResult> {
-  if (!isSupabaseConfigured) {
-    return {
-      success: false,
-      bet_id: '',
-      transaction_id: '',
-      balance_before: 0,
-      balance_after: 0,
-      round_number: 0,
-      panel_id: params.panelId ?? 1,
-      error: 'SUPABASE_NOT_CONFIGURED: Supabase não configurado. Configure VITE_SUPABASE_ANON_KEY no .env'
-    };
-  }
-
-  // Idempotency Key gerada pelo cliente ou recebida (garante idempotência no PostgreSQL)
-  const dbIdempotencyKey = params.idempotencyKey || `idemp_bet_${params.roundId}_p${params.panelId ?? 1}_amt${params.amount}`;
-  const lockKey = `bet:${params.roundId}:${params.panelId ?? 1}`;
-  
-  if (_pendingBets.has(lockKey)) {
-    return {
-      success: false,
-      bet_id: '',
-      transaction_id: '',
-      balance_before: 0,
-      balance_after: 0,
-      round_number: 0,
-      panel_id: params.panelId ?? 1,
-      error: 'DOUBLE_SUBMIT: Aposta já está a ser processada. Aguarde.'
-    };
-  }
-
-  _pendingBets.set(lockKey, true);
-
-  try {
-    const currentUserId = store.getCurrentUser()?.id;
-    const currentWallet = currentUserId ? store.getWallet(currentUserId) : null;
-
-    let { data, error } = await supabase.rpc('place_bet', {
-      p_amount:          params.amount,
-      p_auto_cashout:    params.autoCashout ?? null,
-      p_panel_id:        params.panelId ?? 1,
-      p_round_id:        params.roundId,
-      p_idempotency_key: dbIdempotencyKey,
-      p_user_id:         currentUserId && currentUserId !== 'usr_guest' ? currentUserId : null
-    });
-
-    // Se o banco de dados Supabase ainda não tiver a nova assinatura com 6 parâmetros, tentar a assinatura de 5 parâmetros
-    if (error && error.message.includes('Could not find the function')) {
-      const retry5 = await supabase.rpc('place_bet', {
-        p_round_id:        params.roundId,
-        p_amount:          params.amount,
-        p_panel_id:        params.panelId ?? 1,
-        p_auto_cashout:    params.autoCashout ?? null,
-        p_idempotency_key: dbIdempotencyKey
-      });
-      if (!retry5.error) {
-        data = retry5.data;
-        error = null;
-      } else {
-        // Se ainda falhar, tentar com 4 parâmetros
-        const retry4 = await supabase.rpc('place_bet', {
-          p_round_id:     params.roundId,
-          p_amount:       params.amount,
-          p_panel_id:     params.panelId ?? 1,
-          p_auto_cashout: params.autoCashout ?? null
-        });
-        data = retry4.data;
-        error = retry4.error;
-      }
-    }
-
-    // Se falhar devido a wallet não encontrada ou saldo insuficiente mas o utilizador tem saldo aprovado localmente, sincronizar wallet no Supabase
-    if (error && (error.message.includes('WALLET_NOT_FOUND') || error.message.includes('INSUFFICIENT_FUNDS')) && currentUserId && currentUserId !== 'usr_guest' && currentWallet && currentWallet.availableBalance >= params.amount) {
-      console.log('[RPC] Auto-sincronizando wallet do utilizador no Supabase:', currentUserId, 'Saldo:', currentWallet.availableBalance);
-      await supabase.from('wallets').upsert({
-        user_id: currentUserId,
-        available_balance: currentWallet.availableBalance,
-        locked_balance: 0,
-        currency: 'USD',
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'user_id' }).then(null, () => null);
-
-      const retryWallet = await supabase.rpc('place_bet', {
-        p_amount:          params.amount,
-        p_auto_cashout:    params.autoCashout ?? null,
-        p_panel_id:        params.panelId ?? 1,
-        p_round_id:        params.roundId,
-        p_idempotency_key: dbIdempotencyKey,
-        p_user_id:         currentUserId
-      });
-      if (!retryWallet.error) {
-        data = retryWallet.data;
-        error = null;
-      }
-    }
-
-    const isRoundNotFound = error && (
-      error.message.includes('ROUND_NOT_FOUND') ||
-      error.message.includes('Rodada não encontrada') ||
-      error.message.toLowerCase().includes('round') ||
-      error.message.toLowerCase().includes('not found') ||
-      error.message.toLowerCase().includes('invalid input syntax')
-    );
-
-    if (isRoundNotFound) {
-      // Auto-criar a rodada na tabela game_rounds do Supabase e tentar novamente
-      const rNum = Number(params.roundId.replace(/\D/g, '')) || 1000;
-      const validUuid = toValidUuid(params.roundId);
-
-      // 1. Tentar upsert com id UUID válido
-      await supabase.from('game_rounds').upsert({
-        id: validUuid,
-        round_number: rNum,
-        status: 'COUNTDOWN',
-        server_seed_hash: 'skybird_auto_hash',
-        client_seed: 'skybird_client_seed_main',
-        started_at: new Date().toISOString()
-      }, { onConflict: 'id' }).then(null, () => null);
-
-      // 2. Tentar upsert com round_number
-      await supabase.from('game_rounds').upsert({
-        round_number: rNum,
-        status: 'COUNTDOWN',
-        server_seed_hash: 'skybird_auto_hash',
-        client_seed: 'skybird_client_seed_main',
-        started_at: new Date().toISOString()
-      }, { onConflict: 'round_number' }).then(null, () => null);
-
-      const retryRound = await supabase.rpc('place_bet', {
-        p_amount:          params.amount,
-        p_auto_cashout:    params.autoCashout ?? null,
-        p_panel_id:        params.panelId ?? 1,
-        p_round_id:        validUuid,
-        p_idempotency_key: dbIdempotencyKey,
-        p_user_id:         currentUserId && currentUserId !== 'usr_guest' ? currentUserId : null
-      });
-
-      if (!retryRound.error) {
-        data = retryRound.data;
-        error = null;
-      } else {
-        // Tentar com round_number como string simples ('1001')
-        const retryNumStr = await supabase.rpc('place_bet', {
-          p_amount:          params.amount,
-          p_auto_cashout:    params.autoCashout ?? null,
-          p_panel_id:        params.panelId ?? 1,
-          p_round_id:        String(rNum),
-          p_idempotency_key: dbIdempotencyKey,
-          p_user_id:         currentUserId && currentUserId !== 'usr_guest' ? currentUserId : null
-        });
-        if (!retryNumStr.error) {
-          data = retryNumStr.data;
-          error = null;
-        }
-      }
-    }
-
-    if (error) {
-      console.error('[RPC] place_bet error:', error.message);
-      const isMissingFunc = error.message.includes('Could not find the function');
-      const userMessage = isMissingFunc
-        ? 'A função SQL place_bet precisa ser executada no SQL Editor do Supabase. Verifique o ficheiro supabase/migrations/20260901_financial_integrity_and_rpc.sql.'
-        : error.message;
-
-      return {
-        success: false,
-        bet_id: '',
-        transaction_id: '',
-        balance_before: 0,
-        balance_after: 0,
-        round_number: 0,
-        panel_id: params.panelId ?? 1,
-        error: userMessage
-      };
-    }
-
-    return {
-      success: true,
-      bet_id:          data.bet_id,
-      transaction_id:  data.transaction_id,
-      balance_before:  Number(data.balance_before),
-      balance_after:   Number(data.balance_after),
-      round_number:    Number(data.round_number),
-      panel_id:        Number(data.panel_id)
-    };
-  } catch (err: any) {
-    console.error('[RPC] place_bet exception:', err.message);
-    return {
-      success: false,
-      bet_id: '',
-      transaction_id: '',
-      balance_before: 0,
-      balance_after: 0,
-      round_number: 0,
-      panel_id: params.panelId ?? 1,
-      error: err.message
-    };
-  } finally {
-    _pendingBets.delete(lockKey);
-  }
+export function subscribeToWalletChanges(userId:string,onBalanceChange:(availableBalance:number,lockedBalance:number)=>void){
+  if(!isSupabaseConfigured)return()=>{};
+  const channel=supabase.channel(`wallet:${userId}`).on('postgres_changes',{event:'UPDATE',schema:'public',table:'wallets',filter:`user_id=eq.${userId}`},payload=>{const row:any=payload.new;onBalanceChange(Number(row.available_balance??0),Number(row.locked_balance??0));}).subscribe();
+  return()=>{void supabase.removeChannel(channel);};
 }
 
-// ─────────────────────────────────────────────────────────
-// cashout_bet — Cashout atómico via RPC server-side
-// O payout é sempre calculado no PostgreSQL.
-// O frontend apenas envia o multiplicador actual.
-// ─────────────────────────────────────────────────────────
-
-export async function serverCashoutBet(params: {
-  betId: string;
-  multiplier: number;
-}): Promise<CashoutBetResult> {
-  if (!isSupabaseConfigured) {
-    return {
-      success: false,
-      payout: 0,
-      multiplier: params.multiplier,
-      balance_after: 0,
-      transaction_id: '',
-      bet_id: params.betId,
-      error: 'SUPABASE_NOT_CONFIGURED: Supabase não configurado.'
-    };
-  }
-
-  // Chave de idempotência: betId
-  const lockKey = `cashout:${params.betId}`;
-  if (_pendingCashouts.has(lockKey)) {
-    return {
-      success: false,
-      payout: 0,
-      multiplier: params.multiplier,
-      balance_after: 0,
-      transaction_id: '',
-      bet_id: params.betId,
-      error: 'DOUBLE_CASHOUT: Cashout já está a ser processado.'
-    };
-  }
-
-  _pendingCashouts.set(lockKey, true);
-
-  try {
-    const currentUserId = store.getCurrentUser()?.id;
-    let { data, error } = await supabase.rpc('cashout_bet', {
-      p_bet_id:     params.betId,
-      p_multiplier: params.multiplier,
-      p_user_id:    currentUserId && currentUserId !== 'usr_guest' ? currentUserId : null
-    });
-
-    if (error && error.message.includes('Could not find the function')) {
-      const retryWithoutUser = await supabase.rpc('cashout_bet', {
-        p_bet_id:     params.betId,
-        p_multiplier: params.multiplier
-      });
-      data = retryWithoutUser.data;
-      error = retryWithoutUser.error;
-    }
-
-    if (error) {
-      console.error('[RPC] cashout_bet error:', error.message);
-      return {
-        success: false,
-        payout: 0,
-        multiplier: params.multiplier,
-        balance_after: 0,
-        transaction_id: '',
-        bet_id: params.betId,
-        error: error.message
-      };
-    }
-
-    return {
-      success: true,
-      payout:         Number(data.payout),
-      multiplier:     Number(data.multiplier),
-      balance_after:  Number(data.balance_after),
-      transaction_id: data.transaction_id,
-      bet_id:         data.bet_id
-    };
-  } catch (err: any) {
-    console.error('[RPC] cashout_bet exception:', err.message);
-    return {
-      success: false,
-      payout: 0,
-      multiplier: params.multiplier,
-      balance_after: 0,
-      transaction_id: '',
-      bet_id: params.betId,
-      error: err.message
-    };
-  } finally {
-    _pendingCashouts.delete(lockKey);
-  }
+export function subscribeToActiveBets(roundId:string,onBetsChange:(bets:any[])=>void){
+  if(!isSupabaseConfigured)return()=>{};
+  const channel=supabase.channel(`bets:${roundId}`).on('postgres_changes',{event:'*',schema:'public',table:'bets',filter:`round_id=eq.${roundId}`},async()=>{
+    const {data}=await supabase.from('bets').select('id,user_id,amount,cashout_multiplier,payout,status,panel_id,created_at').eq('round_id',roundId);
+    if(data)onBetsChange(data);
+  }).subscribe();
+  return()=>{void supabase.removeChannel(channel);};
 }
 
-// ─────────────────────────────────────────────────────────
-// create_next_round — Criar rodada no servidor
-// O crash_point é determinado inteiramente no PostgreSQL.
-// ─────────────────────────────────────────────────────────
-
-export async function serverCreateNextRound(): Promise<CreateRoundResult> {
-  if (!isSupabaseConfigured) {
-    return {
-      success: false,
-      round_id: '',
-      round_number: 0,
-      server_seed_hash: '',
-      client_seed: '',
-      nonce: 0,
-      status: '',
-      error: 'SUPABASE_NOT_CONFIGURED'
-    };
-  }
-
-  try {
-    const { data, error } = await supabase.rpc('create_next_round');
-
-    if (error) {
-      console.error('[RPC] create_next_round error:', error.message);
-      return {
-        success: false,
-        round_id: '',
-        round_number: 0,
-        server_seed_hash: '',
-        client_seed: '',
-        nonce: 0,
-        status: '',
-        error: error.message
-      };
-    }
-
-    return {
-      success: true,
-      round_id:          data.round_id,
-      round_number:      Number(data.round_number),
-      server_seed_hash:  data.server_seed_hash,
-      client_seed:       data.client_seed,
-      nonce:             Number(data.nonce),
-      status:            data.status
-    };
-  } catch (err: any) {
-    return {
-      success: false,
-      round_id: '',
-      round_number: 0,
-      server_seed_hash: '',
-      client_seed: '',
-      nonce: 0,
-      status: '',
-      error: err.message
-    };
-  }
+export async function uploadKYCDocument(userId:string,file:File,documentType:'id_document'|'selfie'){
+  if(!isSupabaseConfigured)return{path:null,error:'Supabase não configurado.'};
+  const extension=file.type==='application/pdf'?'pdf':'jpg';
+  const filePath=`${userId}/${documentType}_${Date.now()}.${extension}`;
+  const {error}=await supabase.storage.from('kyc-documents').upload(filePath,file,{upsert:false,contentType:file.type,cacheControl:'3600'});
+  return error?{path:null,error:error.message}:{path:filePath,error:null};
 }
 
-// ─────────────────────────────────────────────────────────
-// reveal_round_seed — Revelar server_seed após CRASHED
-// Permite verificação Provably Fair pelo utilizador.
-// ─────────────────────────────────────────────────────────
-
-export async function serverRevealRoundSeed(roundId: string): Promise<RevealSeedResult | null> {
-  if (!isSupabaseConfigured) return null;
-
-  try {
-    const { data, error } = await supabase.rpc('reveal_round_seed', {
-      p_round_id: roundId
-    });
-
-    if (error) {
-      console.error('[RPC] reveal_round_seed error:', error.message);
-      return null;
-    }
-
-    return {
-      round_id:          data.round_id,
-      round_number:      Number(data.round_number),
-      server_seed:       data.server_seed,
-      server_seed_hash:  data.server_seed_hash,
-      client_seed:       data.client_seed,
-      nonce:             Number(data.nonce),
-      crash_point:       Number(data.crash_point),
-      status:            data.status
-    };
-  } catch (err: any) {
-    console.error('[RPC] reveal_round_seed exception:', err.message);
-    return null;
-  }
+export async function getKYCSignedUrl(storagePath:string){
+  if(!isSupabaseConfigured)return null;
+  const {data,error}=await supabase.storage.from('kyc-documents').createSignedUrl(storagePath,3600);
+  return error?null:data?.signedUrl??null;
 }
 
-// ─────────────────────────────────────────────────────────
-const _walletChannels: Map<string, any> = new Map();
-
-export function subscribeToWalletChanges(
-  userId: string,
-  onBalanceChange: (availableBalance: number, lockedBalance: number) => void
-) {
-  if (!isSupabaseConfigured) return () => {};
-
-  // Se já existe um canal ativo para este utilizador, remove-o antes de criar um novo
-  if (_walletChannels.has(userId)) {
-    try {
-      supabase.removeChannel(_walletChannels.get(userId));
-    } catch {
-      /* ignore */
-    }
-    _walletChannels.delete(userId);
-  }
-
-  const channelName = `wallet:${userId}`;
-  const channel = supabase.channel(channelName);
-
-  channel
-    .on(
-      'postgres_changes',
-      {
-        event:  'UPDATE',
-        schema: 'public',
-        table:  'wallets',
-        filter: `user_id=eq.${userId}`
-      },
-      (payload) => {
-        const row = payload.new as any;
-        onBalanceChange(
-          Number(row.available_balance ?? 0),
-          Number(row.locked_balance ?? 0)
-        );
-      }
-    )
-    .subscribe();
-
-  _walletChannels.set(userId, channel);
-
-  // Retornar função de cleanup
-  return () => {
-    try {
-      supabase.removeChannel(channel);
-    } catch {
-      /* ignore */
-    }
-    _walletChannels.delete(userId);
-  };
+export async function sendSupportMessageSupabase(params:{conversationId:string;senderId:string;senderName:string;senderRole:'player'|'admin';text:string}){
+  if(!isSupabaseConfigured)return{success:false,error:'Supabase not configured'};
+  const {data,error}=await supabase.from('support_messages').insert({conversation_id:params.conversationId,sender_id:params.senderId,sender_name:params.senderName,sender_role:params.senderRole,text:params.text,created_at:new Date().toISOString()}).select().single();
+  return error?{success:false,error:error.message}:{success:true,data};
 }
-
-// ─────────────────────────────────────────────────────────
-// subscribeToCurrentRound — Realtime: Estado da rodada activa
-// ─────────────────────────────────────────────────────────
-
-export function subscribeToCurrentRound(
-  onRoundChange: (round: {
-    id: string;
-    round_number: number;
-    status: string;
-    server_seed_hash: string;
-    client_seed: string;
-    nonce: number;
-    crash_point?: number;  // Apenas exposto depois de CRASHED
-    started_at?: string;
-    ended_at?: string;
-    total_bets_amount: number;
-    total_payout_amount: number;
-  }) => void
-) {
-  if (!isSupabaseConfigured) return () => {};
-
-  const channel = supabase
-    .channel('game_rounds_current')
-    .on(
-      'postgres_changes',
-      {
-        event:  '*',
-        schema: 'public',
-        table:  'game_rounds'
-      },
-      (payload) => {
-        const row = payload.new as any;
-        if (!row) return;
-
-        // Nunca expor crash_point antes do encerramento
-        const isClosed = row.status === 'CRASHED' || row.status === 'FINISHED';
-
-        onRoundChange({
-          id:                   row.id,
-          round_number:         Number(row.round_number),
-          status:               row.status,
-          server_seed_hash:     row.server_seed_hash,  // Hash pública (sempre visível)
-          client_seed:          row.client_seed,
-          nonce:                Number(row.nonce),
-          crash_point:          isClosed ? Number(row.crash_point) : undefined,
-          started_at:           row.started_at,
-          ended_at:             row.ended_at,
-          total_bets_amount:    Number(row.total_bets_amount ?? 0),
-          total_payout_amount:  Number(row.total_payout_amount ?? 0)
-        });
-      }
-    )
-    .subscribe();
-
-  return () => {
-    supabase.removeChannel(channel);
-  };
-}
-
-// ─────────────────────────────────────────────────────────
-// subscribeToActiveBets — Realtime: Apostas activas da rodada
-// ─────────────────────────────────────────────────────────
-
-export function subscribeToActiveBets(
-  roundId: string,
-  onBetsChange: (bets: any[]) => void
-) {
-  if (!isSupabaseConfigured) return () => {};
-
-  const channel = supabase
-    .channel(`bets:${roundId}`)
-    .on(
-      'postgres_changes',
-      {
-        event:  '*',
-        schema: 'public',
-        table:  'bets',
-        filter: `round_id=eq.${roundId}`
-      },
-      async () => {
-        // Ao qualquer mudança, re-fetch para garantir consistência
-        const { data } = await supabase
-          .from('bets')
-          .select('id, user_id, amount, cashout_multiplier, payout, status, panel_id, created_at')
-          .eq('round_id', roundId);
-
-        if (data) onBetsChange(data);
-      }
-    )
-    .subscribe();
-
-  return () => {
-    supabase.removeChannel(channel);
-  };
-}
-
-// ─────────────────────────────────────────────────────────
-// uploadKYCDocument — Upload para bucket privado kyc-documents
-// Sem URLs públicas permanentes. Admin acede via signed URLs.
-// ─────────────────────────────────────────────────────────
-
-export async function uploadKYCDocument(
-  userId: string,
-  file: File,
-  documentType: 'id_document' | 'selfie'
-): Promise<{ path: string | null; error: string | null }> {
-  if (!isSupabaseConfigured) {
-    return { path: null, error: 'Supabase não configurado.' };
-  }
-
-  const extension = file.type === 'application/pdf' ? 'pdf' : 'jpg';
-  const filePath = `${userId}/${documentType}_${Date.now()}.${extension}`;
-
-  const { error } = await supabase.storage
-    .from('kyc-documents')
-    .upload(filePath, file, {
-      upsert: false,
-      contentType: file.type,
-      cacheControl: '3600'
-    });
-
-  if (error) {
-    console.error('[KYC Storage] Upload error:', error.message);
-    return { path: null, error: error.message };
-  }
-
-  return { path: filePath, error: null };
-}
-
-// ─────────────────────────────────────────────────────────
-// getKYCSignedUrl — URL temporária para Admin visualizar documento
-// Válida por 1 hora. Nunca pública permanente.
-// ─────────────────────────────────────────────────────────
-
-export async function getKYCSignedUrl(storagePath: string): Promise<string | null> {
-  if (!isSupabaseConfigured) return null;
-
-  const { data, error } = await supabase.storage
-    .from('kyc-documents')
-    .createSignedUrl(storagePath, 3600); // 1 hora
-
-  if (error || !data?.signedUrl) {
-    console.error('[KYC Storage] Signed URL error:', error?.message);
-    return null;
-  }
-
-  return data.signedUrl;
-}
-
-// ─────────────────────────────────────────────────────────
-// SUPPORT MESSAGES — Realtime & Persistence
-// ─────────────────────────────────────────────────────────
-
-export async function sendSupportMessageSupabase(params: {
-  conversationId: string;
-  senderId: string;
-  senderName: string;
-  senderRole: 'player' | 'admin';
-  text: string;
-}): Promise<{ success: boolean; data?: any; error?: string }> {
-  if (!isSupabaseConfigured) return { success: false, error: 'Supabase not configured' };
-
-  try {
-    const { data, error } = await supabase
-      .from('support_messages')
-      .insert({
-        conversation_id: params.conversationId,
-        sender_id: params.senderId,
-        sender_name: params.senderName,
-        sender_role: params.senderRole,
-        text: params.text,
-        created_at: new Date().toISOString()
-      })
-      .select()
-      .single();
-
-    if (error) {
-      console.error('[Support] Error sending message:', error.message);
-      return { success: false, error: error.message };
-    }
-
-    // Update conversation last message in support_conversations
-    await supabase
-      .from('support_conversations')
-      .upsert({
-        id: params.conversationId,
-        user_id: params.senderId,
-        user_name: params.senderName,
-        last_message: params.text,
-        last_message_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      });
-
-    return { success: true, data };
-  } catch (err: any) {
-    return { success: false, error: err.message };
-  }
-}
-
-let _supportChannel: any = null;
-export function subscribeToSupportMessages(onMessage: (msg: any) => void) {
-  if (!isSupabaseConfigured) return () => {};
-
-  if (_supportChannel) {
-    try { supabase.removeChannel(_supportChannel); } catch { /* safe */ }
-  }
-
-  _supportChannel = supabase
-    .channel('support_messages_channel')
-    .on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'support_messages' },
-      (payload) => {
-        if (payload.new) onMessage(payload.new);
-      }
-    )
-    .subscribe();
-
-  return () => {
-    try { supabase.removeChannel(_supportChannel); } catch { /* safe */ }
-    _supportChannel = null;
-  };
-}
-
-// ─────────────────────────────────────────────────────────
-// TRANSACTIONS — Realtime & Persistence (Deposits / Withdrawals)
-// ─────────────────────────────────────────────────────────
-
-export async function createTransactionSupabase(params: {
-  userId: string;
-  type: 'deposit' | 'withdrawal' | 'bet' | 'cashout' | 'refund' | 'referral_bonus';
-  amount: number;
-  balanceBefore: number;
-  balanceAfter: number;
-  reference: string;
-  method?: string;
-  details?: string;
-}): Promise<{ success: boolean; data?: any; error?: string }> {
-  if (!isSupabaseConfigured) return { success: false, error: 'Supabase not configured' };
-
-  try {
-    const { data, error } = await supabase
-      .from('transactions')
-      .insert({
-        user_id: params.userId,
-        type: params.type,
-        amount: params.amount,
-        currency: 'USD',
-        balance_before: params.balanceBefore,
-        balance_after: params.balanceAfter,
-        reference: params.reference,
-        status: params.type === 'deposit' || params.type === 'withdrawal' ? 'pending' : 'completed',
-        method: params.method || 'Airtm',
-        details: params.details || '',
-        created_at: new Date().toISOString()
-      })
-      .select()
-      .single();
-
-    if (error) {
-      console.error('[Transaction] Error creating transaction:', error.message);
-      return { success: false, error: error.message };
-    }
-
-    return { success: true, data };
-  } catch (err: any) {
-    return { success: false, error: err.message };
-  }
-}
-
-let _txChannel: any = null;
-export function subscribeToTransactions(onTxChange: (tx: any) => void) {
-  if (!isSupabaseConfigured) return () => {};
-
-  if (_txChannel) {
-    try { supabase.removeChannel(_txChannel); } catch { /* safe */ }
-  }
-
-  _txChannel = supabase
-    .channel('transactions_channel')
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'transactions' },
-      (payload) => {
-        if (payload.new) onTxChange(payload.new);
-      }
-    )
-    .subscribe();
-
-  return () => {
-    try { supabase.removeChannel(_txChannel); } catch { /* safe */ }
-    _txChannel = null;
-  };
-}
-
-// ─────────────────────────────────────────────────────────
-// PROFILES & USERS — Realtime Sync for Admin Dashboard
-// ─────────────────────────────────────────────────────────
-
-let _profilesChannel: any = null;
-export function subscribeToProfiles(onProfilesChange: (profile: any) => void) {
-  if (!isSupabaseConfigured) return () => {};
-
-  if (_profilesChannel) {
-    try { supabase.removeChannel(_profilesChannel); } catch { /* safe */ }
-  }
-
-  _profilesChannel = supabase
-    .channel('profiles_channel')
-    .on(
-      'postgres_changes',
-      { event: '*', schema: 'public', table: 'profiles' },
-      (payload) => {
-        if (payload.new) onProfilesChange(payload.new);
-      }
-    )
-    .subscribe();
-
-  return () => {
-    try { supabase.removeChannel(_profilesChannel); } catch { /* safe */ }
-    _profilesChannel = null;
-  };
-}
-
-// ─────────────────────────────────────────────────────────
-// SERVER DELETE USER — Exclusão Server-Authoritative de Utilizador
-// Executa a RPC delete_user_admin ou limpa tabelas em cascata
-// ─────────────────────────────────────────────────────────
-
-export async function serverDeleteUser(userId: string): Promise<{ success: boolean; error?: string }> {
-  if (!isSupabaseConfigured) {
-    return { success: true };
-  }
-
-  try {
-    // 1. Tentar exclusão atómica via RPC delete_user_admin (PostgreSQL Security Definer)
-    const { data, error } = await supabase.rpc('delete_user_admin', {
-      p_user_id: userId
-    });
-
-    if (!error && data) {
-      console.log('[RPC] Utilizador eliminado com sucesso via RPC delete_user_admin:', userId);
-      return { success: true };
-    }
-
-    if (error) {
-      console.warn('[RPC] RPC delete_user_admin indisponível ou erro:', error.message, '— A tentar exclusão direta por tabelas...');
-    }
-
-    // 2. Fallback: Exclusão em cascata pelas tabelas públicas
-    await supabase.from('bets').delete().eq('user_id', userId).then(null, () => null);
-    await supabase.from('ledger_transactions').delete().eq('user_id', userId).then(null, () => null);
-    await supabase.from('support_messages').delete().or(`user_id.eq.${userId},sender_id.eq.${userId}`).then(null, () => null);
-    await supabase.from('wallets').delete().eq('user_id', userId).then(null, () => null);
-    await supabase.from('verification_requests').delete().eq('user_id', userId).then(null, () => null);
-    await supabase.from('idempotency_keys').delete().eq('user_id', userId).then(null, () => null);
-
-    // 3. Eliminar o perfil na tabela 'profiles' (NÃO 'users')
-    const { error: profileErr } = await supabase.from('profiles').delete().eq('id', userId);
-    if (profileErr) {
-      console.error('[Supabase] Erro ao eliminar perfil em profiles:', profileErr.message);
-      return { success: false, error: profileErr.message };
-    }
-
-    return { success: true };
-  } catch (err: any) {
-    console.error('[RPC] Exceção ao eliminar utilizador:', err.message);
-    return { success: false, error: err.message };
-  }
-}
-
