@@ -1,12 +1,15 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
+import { PasswordRecoveryPage } from './components/auth/PasswordRecoveryPage';
 import './index.css';
 import './services/productionAuthorityPatch';
 import './services/productionSecurityPatch';
 
+const recoveryRoute = window.location.hash.toLowerCase().replace('#', '') === 'recover-password';
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    {recoveryRoute ? <PasswordRecoveryPage /> : <App />}
   </StrictMode>,
 );
