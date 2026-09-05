@@ -255,6 +255,16 @@ export const BettingPanel: React.FC<BettingPanelProps> = ({
                 @{cashedOutMultiplier?.toFixed(2)}x
               </span>
             </div>
+          ) : hasActiveBet && status === 'CRASHED' ? (
+            /* STATE 2B: CRASHED LOSS CONFIRMATION */
+            <div className="w-full h-full min-h-[72px] rounded-xl bg-[#2a0d0d] border border-red-500/50 flex flex-col items-center justify-center p-2 text-center shadow-inner">
+              <span className="text-[10px] uppercase font-bold text-red-400 flex items-center gap-1">
+                {t('game.crashed', 'RODADA CRASHOU!')}
+              </span>
+              <span className="text-sm font-mono text-red-300 font-bold mt-0.5">
+                {betAmount.toFixed(2)} {currencySymbol}
+              </span>
+            </div>
           ) : hasActiveBet && (status === 'COUNTDOWN' || status === 'WAITING') ? (
             /* STATE 3: BET PLACED WAITING FOR TAKEOFF -> CANCEL BUTTON */
             <button

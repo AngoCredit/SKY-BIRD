@@ -431,10 +431,13 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
 
           // Reset Panel 1 — para a nova rodada
           if (!isPlacingBet1Ref.current) {
+            const hasStoreBet1 = store.getActiveBets().some(b => b.isCurrentUser && b.status === 'active' && (b.panelId === 1 || !b.panelId));
             hasCashedOut1Ref.current = false;
-            hasActiveBet1Ref.current = false;
-            setHasActiveBet1(false);
-            setBetAmount1(0);
+            hasActiveBet1Ref.current = hasStoreBet1;
+            setHasActiveBet1(hasStoreBet1);
+            if (!hasStoreBet1) {
+              setBetAmount1(0);
+            }
             setHasCashedOut1(false);
             setCashedOutMultiplier1(null);
             setCashedOutPayout1(null);
@@ -442,10 +445,13 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
 
           // Reset Panel 2 — para a nova rodada
           if (!isPlacingBet2Ref.current) {
+            const hasStoreBet2 = store.getActiveBets().some(b => b.isCurrentUser && b.status === 'active' && b.panelId === 2);
             hasCashedOut2Ref.current = false;
-            hasActiveBet2Ref.current = false;
-            setHasActiveBet2(false);
-            setBetAmount2(0);
+            hasActiveBet2Ref.current = hasStoreBet2;
+            setHasActiveBet2(hasStoreBet2);
+            if (!hasStoreBet2) {
+              setBetAmount2(0);
+            }
             setHasCashedOut2(false);
             setCashedOutMultiplier2(null);
             setCashedOutPayout2(null);
