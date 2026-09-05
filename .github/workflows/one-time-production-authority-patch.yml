@@ -1,0 +1,307 @@
+name: One-time production authority patch
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message != 'chore: apply production authority patch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Patch client game authority
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          store = Path('src/services/store.ts')
+          text = store.read_text(encoding='utf-8')
+
+          text = text.replace(
+              "  serverCashoutBet,\n  serverDeleteUser,",
+              "  serverCashoutBet,\n  serverDeleteUser,\n  subscribeToCurrentRound,"
+          )
+
+          if 'private serverRoundUnsubscribe:' not in text:
+              text = text.replace(
+                  "  private currentRound: GameRound | null = null;\n",
+                  "  private currentRound: GameRound | null = null;\n  private serverRoundUnsubscribe: (() => void) | null = null;\n  private serverRoundReady = false;\n"
+              )
+
+          text = text.replace(
+              "    this.initNextRound();\n    this.initSupabaseAdminSettings();",
+              "    this.initNextRound();\n    this.startServerRoundSubscription();\n    this.initSupabaseAdminSettings();"
+          )
+
+          game_block = '''  private syncServerRound(round: any): void {
+    const previous = this.currentRound;
+    const status = round.status as GameRoundStatus;
+    const next: GameRound = {
+      id: String(round.id),
+      roundNumber: Number(round.round_number),
+      status,
+      startedAt: round.started_at ? new Date(round.started_at).getTime() : Date.now(),
+      endedAt: round.ended_at ? new Date(round.ended_at).getTime() : null,
+      crashPoint: round.crash_point != null ? Number(round.crash_point) : 0,
+      serverSeed: '',
+      serverSeedHash: String(round.server_seed_hash || ''),
+      clientSeed: String(round.client_seed || 'skybird-public-client-v1'),
+      nonce: Number(round.nonce || 0),
+      totalBetsAmount: Number(round.total_bets_amount || 0),
+      totalPayoutAmount: Number(round.total_payout_amount || 0),
+      createdAt: round.created_at || new Date().toISOString()
+    };
+
+    if (previous && previous.roundNumber !== next.roundNumber && previous.status !== 'CRASHED') {
+      this.pastRounds = this.pastRounds.filter(r => r.roundNumber !== previous.roundNumber);
+      if (previous.status === 'CRASHED' || previous.crashPoint > 0) {
+        this.pastRounds.unshift({ ...previous, status: 'CRASHED' });
+      }
+      this.pastRounds = this.pastRounds.slice(0, 30);
+    }
+
+    this.currentRound = next;
+    this.serverRoundReady = true;
+
+    if (status === 'CRASHED' && !this.pastRounds.some(r => r.roundNumber === next.roundNumber)) {
+      this.pastRounds.unshift({ ...next });
+      this.pastRounds = this.pastRounds.slice(0, 30);
+    }
+
+    this.notify();
+  }
+
+  private startServerRoundSubscription(): void {
+    if (!isSupabaseConfigured || this.serverRoundUnsubscribe) return;
+    this.serverRoundUnsubscribe = subscribeToCurrentRound((round) => this.syncServerRound(round));
+  }
+
+  public getSynchronizedRoundState(): {
+    roundNumber: number;
+    status: GameRoundStatus;
+    startedAt: number;
+    countdownRemaining: number;
+    currentMultiplier: number;
+    crashPoint: number;
+    serverSeedHash: string;
+    serverSeed: string;
+    clientSeed: string;
+  } {
+    const round = this.getCurrentRound();
+    const now = Date.now();
+    let currentMultiplier = 1;
+
+    if (round.status === 'RUNNING' && round.startedAt > 0) {
+      const elapsedSeconds = Math.max(0, (now - round.startedAt) / 1000);
+      currentMultiplier = Math.max(1, Math.floor(Math.exp(0.25 * elapsedSeconds) * 100) / 100);
+      if (round.crashPoint > 0) currentMultiplier = Math.min(currentMultiplier, round.crashPoint);
+    } else if (round.status === 'CRASHED' && round.crashPoint > 0) {
+      currentMultiplier = round.crashPoint;
+    }
+
+    return {
+      roundNumber: round.roundNumber,
+      status: round.status,
+      startedAt: round.startedAt,
+      countdownRemaining: round.status === 'COUNTDOWN' || round.status === 'WAITING' ? 5 : 0,
+      currentMultiplier,
+      crashPoint: round.crashPoint > 0 ? round.crashPoint : Number.POSITIVE_INFINITY,
+      serverSeedHash: round.serverSeedHash,
+      serverSeed: '',
+      clientSeed: round.clientSeed
+    };
+  }
+
+  public getCurrentRound(): GameRound {
+    if (this.currentRound) return this.currentRound;
+
+    return {
+      id: '',
+      roundNumber: 0,
+      status: 'WAITING',
+      startedAt: 0,
+      endedAt: null,
+      crashPoint: 0,
+      serverSeed: '',
+      serverSeedHash: '',
+      clientSeed: 'skybird-public-client-v1',
+      nonce: 0,
+      totalBetsAmount: 0,
+      totalPayoutAmount: 0,
+      createdAt: new Date().toISOString()
+    };
+  }
+
+  public initNextRound(): GameRound {
+    return this.getCurrentRound();
+  }
+'''
+
+          pattern = re.compile(r"  public getSynchronizedRoundState\(\): \{.*?^  public initNextRound\(\): GameRound \{\n    return this\.getCurrentRound\(\);\n  \}\n", re.S | re.M)
+          if not pattern.search(text):
+              raise SystemExit('GAME_BLOCK_NOT_FOUND')
+          text = pattern.sub(game_block, text, count=1)
+
+          def replace_method(source, signature, next_signature, replacement):
+              pattern = re.compile(re.escape(signature) + r'.*?(?=^' + re.escape(next_signature) + r')', re.S | re.M)
+              if not pattern.search(source):
+                  raise SystemExit(f'METHOD_NOT_FOUND: {signature}')
+              return pattern.sub(replacement + '\n\n', source, count=1)
+
+          place_replacement = '''  public async placeBetAsync(
+    amount: number,
+    autoCashOutMultiplier: number | null = null,
+    panelId: number = 1
+  ): Promise<{ bet: Bet; serverResult: any }> {
+    if (!isSupabaseConfigured || this.currentUser.id === 'usr_guest') {
+      throw new Error('Apostas reais exigem uma sessão Supabase autenticada.');
+    }
+
+    if (amount < this.adminSettings.minBet || amount > this.adminSettings.maxBet) {
+      throw new Error(`Aposta deve estar entre $${this.adminSettings.minBet} e $${this.adminSettings.maxBet}`);
+    }
+
+    const currentRound = this.getCurrentRound();
+    if (!currentRound.id || !['WAITING', 'COUNTDOWN'].includes(currentRound.status)) {
+      throw new Error('Apostas fechadas. Aguarde a próxima rodada.');
+    }
+
+    const existingBet = this.activeBets.find(
+      b => b.isCurrentUser && b.panelId === panelId && b.status === 'active' && b.roundId === currentRound.id
+    );
+    if (existingBet) throw new Error('Você já possui uma aposta ativa neste painel para esta rodada.');
+
+    const serverResult = await serverPlaceBet({
+      roundId: currentRound.id,
+      amount,
+      panelId,
+      autoCashout: autoCashOutMultiplier
+    });
+
+    if (!serverResult.success) {
+      throw new Error(serverResult.error || 'Falha ao registrar aposta no servidor.');
+    }
+
+    const bet: Bet = {
+      id: serverResult.bet_id,
+      roundId: currentRound.id,
+      userId: this.currentUser.id,
+      userName: this.currentUser.name,
+      userAvatar: this.currentUser.avatar,
+      amount,
+      autoCashOutMultiplier,
+      cashOutMultiplier: null,
+      payout: null,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      isCurrentUser: true,
+      panelId
+    };
+
+    this.activeBets = [
+      ...this.activeBets.filter(b => !(b.isCurrentUser && b.panelId === panelId && b.status === 'active')),
+      bet
+    ];
+
+    const balanceAfter = Number(serverResult.balance_after);
+    this.wallets[this.currentUser.id] = {
+      ...this.getWallet(this.currentUser.id),
+      availableBalance: balanceAfter,
+      totalBalance: balanceAfter
+    };
+
+    this.notify();
+    return { bet, serverResult };
+  }
+'''
+          text = replace_method(text, '  public async placeBetAsync(', '  /** @deprecated Use placeBetAsync()', place_replacement)
+
+          cashout_replacement = '''  public async cashOutAsync(
+    _currentMultiplier?: number,
+    panelId?: number
+  ): Promise<{ payout: number; multiplier: number; betId: string }> {
+    if (!isSupabaseConfigured || this.currentUser.id === 'usr_guest') {
+      throw new Error('Cash out real exige uma sessão Supabase autenticada.');
+    }
+
+    const myBet = this.activeBets.find(
+      b => b.isCurrentUser && b.status === 'active' && (!panelId || b.panelId === panelId)
+    );
+    if (!myBet) throw new Error('Nenhuma aposta ativa para cash out.');
+
+    const serverResult = await serverCashoutBet({ betId: myBet.id });
+    if (!serverResult.success) {
+      throw new Error(serverResult.error || 'Cash out rejeitado pelo servidor.');
+    }
+
+    myBet.cashOutMultiplier = serverResult.multiplier;
+    myBet.payout = serverResult.payout;
+    myBet.status = 'cashed_out';
+    this.userBetHistory.unshift({ ...myBet });
+    this.userBetHistory = this.userBetHistory.slice(0, 50);
+
+    const balanceAfter = Number(serverResult.balance_after);
+    this.wallets[this.currentUser.id] = {
+      ...this.getWallet(this.currentUser.id),
+      availableBalance: balanceAfter,
+      totalBalance: balanceAfter
+    };
+
+    this.notify();
+    return { payout: serverResult.payout, multiplier: serverResult.multiplier, betId: myBet.id };
+  }
+'''
+          text = replace_method(text, '  public async cashOutAsync(', '  /** @deprecated Use cashOutAsync()', cashout_replacement)
+
+          # Disable all browser-side round outcome mutation. PostgreSQL is authoritative.
+          no_op_bot = '''  public triggerBotCashouts(_currentMultiplier: number): void {
+    // Bots are server-side only. Never create or settle fictitious money bets in the browser.
+  }
+'''
+          text = replace_method(text, '  public triggerBotCashouts(', '  public endRound(', no_op_bot)
+
+          no_op_end = '''  public endRound(_crashPoint: number): void {
+    // Round settlement is performed by PostgreSQL tick_game_engine()/crash_round().
+  }
+'''
+          text = replace_method(text, '  public endRound(', '  public getActiveBets(', no_op_end)
+
+          no_op_extend = '''  public extendFlightIfRealPlayersOut(_currentMultiplier: number): void {
+    // Crash points are committed server-side and can never depend on player behaviour.
+  }
+'''
+          text = replace_method(text, '  public extendFlightIfRealPlayersOut(', '  /**\n   * placeBet —', no_op_extend)
+
+          store.write_text(text, encoding='utf-8')
+
+          game = Path('src/components/game/GameView.tsx')
+          g = game.read_text(encoding='utf-8')
+          g2 = g.replace('        store.triggerBotCashouts(calculatedMult);\n', '')
+          g2 = g2.replace('          store.endRound(finalPoint);\n', '')
+          if g2 == g:
+              raise SystemExit('GAMEVIEW_PATCH_NOT_APPLIED')
+          game.write_text(g2, encoding='utf-8')
+
+      - name: Verify TypeScript build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Commit patch and remove one-time workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/services/store.ts src/components/game/GameView.tsx .github/workflows/one-time-production-authority-patch.yml
+          git rm .github/workflows/one-time-production-authority-patch.yml
+          git commit -m "chore: apply production authority patch"
+          git push
