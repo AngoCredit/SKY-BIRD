@@ -56,10 +56,10 @@ BEGIN
   END IF;
 
   -- ── 2. Bloquear e validar aposta (FOR UPDATE previne duplo cashout) ─────────
-  SELECT user_id, amount, status, round_id::text
-  INTO   v_bet_user_id, v_bet_amount, v_bet_status, v_round_id_raw
-  FROM   public.bets
-  WHERE  id::text = p_bet_id
+  SELECT b.user_id, b.amount, b.status, b.round_id::text
+  INTO v_bet_user_id, v_bet_amount, v_bet_status, v_round_id_raw
+  FROM public.bets b
+  WHERE b.id::text = p_bet_id
   FOR UPDATE;
 
   IF NOT FOUND THEN
@@ -81,13 +81,13 @@ BEGIN
     v_round_number := NULL;
   END;
 
-  SELECT status, crash_point, round_number
-  INTO   v_round_status, v_crash_point, v_round_number
-  FROM   public.game_rounds
-  WHERE  id::text        = v_round_id_raw
-      OR id::text        = 'rnd_' || v_round_id_raw
-      OR (v_round_number IS NOT NULL AND round_number = v_round_number)
-  ORDER BY created_at DESC
+  SELECT r.status, r.crash_point, r.round_number
+  INTO v_round_status, v_crash_point, v_round_number
+  FROM public.game_rounds r
+  WHERE r.id::text = v_round_id_raw
+     OR r.id::text = 'rnd_' || v_round_id_raw
+     OR (v_round_number IS NOT NULL AND r.round_number = v_round_number)
+  ORDER BY r.created_at DESC
   LIMIT 1
   FOR UPDATE;
 
