@@ -1,0 +1,233 @@
+name: Enforce server-authoritative game flow
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  enforce:
+    if: !startsWith(github.event.head_commit.message, 'chore: enforce server authority')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Patch store.ts
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          p = Path('src/services/store.ts')
+          s = p.read_text(encoding='utf-8')
+          original = s
+
+          # Prevent the store constructor from creating a browser-owned round.
+          s = s.replace('    this.initNextRound();\n', '', 1)
+
+          # Replace the entire legacy local round lifecycle with a server-only adapter.
+          start = s.find('  getSynchronizedRoundState()')
+          end = s.find('  seedSimulatedBots(', start)
+          if start < 0 or end < 0:
+              raise SystemExit('Could not locate legacy round lifecycle in store.ts')
+
+          replacement = r'''  private serverRoundUnsubscribe: (() => void) | null = null;
+  private serverRoundReady = false;
+
+  private syncServerRound(round: any) {
+    if (!round) return null;
+    const mapped: GameRound = {
+      id: String(round.id),
+      roundNumber: Number(round.roundNumber),
+      status: round.status,
+      startedAt: round.startedAt ?? undefined,
+      endedAt: round.endedAt ?? undefined,
+      crashPoint: round.crashPoint,
+      serverSeedHash: round.serverSeedHash || '',
+      clientSeed: round.clientSeed || '',
+      nonce: Number(round.nonce ?? 0),
+      totalBetsAmount: Number(round.totalBetsAmount ?? 0),
+      totalPayoutAmount: Number(round.totalPayoutAmount ?? 0),
+    } as GameRound;
+    this.currentRound = mapped;
+    this.serverRoundReady = true;
+    return mapped;
+  }
+
+  private startServerRoundSubscription() {
+    if (this.serverRoundUnsubscribe || !isSupabaseConfigured) return;
+    this.serverRoundUnsubscribe = subscribeToCurrentRound((round: any) => {
+      this.syncServerRound(round);
+    });
+  }
+
+  getSynchronizedRoundState() {
+    this.startServerRoundSubscription();
+    const round = this.currentRound;
+    if (!round) {
+      return {
+        roundNumber: 0,
+        status: 'WAITING',
+        crashPoint: null,
+        serverSeed: null,
+        serverSeedHash: '',
+        clientSeed: '',
+        nonce: 0,
+        multiplier: 1,
+        startTime: null,
+        elapsed: 0,
+      };
+    }
+
+    const startTime = round.startedAt ? new Date(round.startedAt).getTime() : null;
+    const elapsed = startTime ? Math.max(0, Date.now() - startTime) : 0;
+    const multiplier = round.status === 'RUNNING'
+      ? Math.floor(Math.exp(0.25 * (elapsed / 1000)) * 100) / 100
+      : 1;
+
+    return {
+      roundNumber: round.roundNumber,
+      status: round.status,
+      crashPoint: round.crashPoint ?? null,
+      serverSeed: null,
+      serverSeedHash: round.serverSeedHash,
+      clientSeed: round.clientSeed,
+      nonce: round.nonce,
+      multiplier,
+      startTime,
+      elapsed,
+    };
+  }
+
+  getCurrentRound(): GameRound {
+    this.startServerRoundSubscription();
+    return this.currentRound ?? ({
+      id: '', roundNumber: 0, status: 'WAITING', crashPoint: undefined,
+      serverSeedHash: '', clientSeed: '', nonce: 0,
+      totalBetsAmount: 0, totalPayoutAmount: 0,
+    } as GameRound);
+  }
+
+  initNextRound() {
+    this.startServerRoundSubscription();
+    return this.currentRound;
+  }
+
+'''
+          s = s[:start] + replacement + s[end:]
+
+          # Remove browser-created bots and outcome manipulation.
+          s = re.sub(r'  seedSimulatedBots\([^\n]*\)\s*\{.*?\n  \}\n\n', '  seedSimulatedBots(..._args: any[]) { /* server-only: no client bots */ }\n\n', s, count=1, flags=re.S)
+          s = re.sub(r'  extendFlightIfRealPlayersOut\([^\n]*\)\s*\{.*?\n  \}\n\n', '  extendFlightIfRealPlayersOut(..._args: any[]) { /* server-only outcome */ }\n\n', s, count=1, flags=re.S)
+
+          # Server-only betting: no local balance mutation and no network fallback.
+          start = s.find('  async placeBetAsync(')
+          end = s.find('  placeBet(', start)
+          if start >= 0 and end >= 0:
+              method = r'''  async placeBetAsync(amount: number, panelId: number, autoCashout: number | null = null) {
+    if (!isSupabaseConfigured) throw new Error('SUPABASE_NOT_CONFIGURED');
+    const { data: auth } = await supabase.auth.getUser();
+    if (!auth.user) throw new Error('UNAUTHENTICATED');
+    const round = this.getCurrentRound();
+    if (!round.id || !['WAITING', 'COUNTDOWN'].includes(round.status)) {
+      throw new Error('ROUND_NOT_ACCEPTING_BETS');
+    }
+
+    const result = await serverPlaceBet({
+      roundId: round.id,
+      amount,
+      panelId,
+      autoCashout,
+    });
+
+    this.balance = Number(result.balance_after);
+    this.saveState();
+    return {
+      id: result.bet_id,
+      roundId: round.id,
+      userId: auth.user.id,
+      amount,
+      autoCashoutMultiplier: autoCashout ?? undefined,
+      cashoutMultiplier: undefined,
+      payout: 0,
+      status: 'active',
+      panelId,
+      isBot: false,
+      createdAt: new Date().toISOString(),
+    } as Bet;
+  }
+
+'''
+              s = s[:start] + method + s[end:]
+
+          # Make legacy local financial methods fail closed.
+          s = re.sub(r'  placeBet\([^\n]*\)\s*\{.*?\n  \}\n\n', "  placeBet(..._args: any[]) { throw new Error('SERVER_AUTHORITY_REQUIRED'); }\n\n", s, count=1, flags=re.S)
+
+          start = s.find('  async cashOutAsync(')
+          end = s.find('  cashOut(', start)
+          if start >= 0 and end >= 0:
+              method = r'''  async cashOutAsync(_currentMultiplier: number, panelId: number) {
+    if (!isSupabaseConfigured) throw new Error('SUPABASE_NOT_CONFIGURED');
+    const { data: auth } = await supabase.auth.getUser();
+    if (!auth.user) throw new Error('UNAUTHENTICATED');
+    const bet = this.activeBets.find((b: any) => b.userId === auth.user!.id && b.panelId === panelId && !b.isBot && b.status === 'active');
+    if (!bet) throw new Error('ACTIVE_BET_NOT_FOUND');
+
+    const result = await serverCashoutBet(bet.id);
+    bet.status = 'cashed_out';
+    bet.cashoutMultiplier = Number(result.multiplier);
+    bet.payout = Number(result.payout);
+    this.balance = Number(result.balance_after);
+    this.saveState();
+    return result;
+  }
+
+'''
+              s = s[:start] + method + s[end:]
+
+          s = re.sub(r'  cashOut\([^\n]*\)\s*\{.*?\n  \}\n\n', "  cashOut(..._args: any[]) { throw new Error('SERVER_AUTHORITY_REQUIRED'); }\n\n", s, count=1, flags=re.S)
+          s = re.sub(r'  triggerBotCashouts\([^\n]*\)\s*\{.*?\n  \}\n\n', '  triggerBotCashouts(..._args: any[]) { /* server-only settlement */ }\n\n', s, count=1, flags=re.S)
+          s = re.sub(r'  endRound\([^\n]*\)\s*\{.*?\n  \}\n\n', '  endRound(..._args: any[]) { /* server-only round lifecycle */ }\n\n', s, count=1, flags=re.S)
+
+          # Local round status mutation must not remain authoritative.
+          s = re.sub(r'  setRoundStatus\([^\n]*\)\s*\{.*?\n  \}\n\n', '  setRoundStatus(..._args: any[]) { throw new Error(\'SERVER_AUTHORITY_REQUIRED\'); }\n\n', s, count=1, flags=re.S)
+
+          if s == original:
+              raise SystemExit('Patch made no changes')
+          p.write_text(s, encoding='utf-8')
+
+      - name: Build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Commit enforced authority patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/services/store.ts
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: enforce server authority"
+          git push origin main
+
+      - name: Remove one-shot workflow
+        if: success()
+        run: |
+          git rm -f .github/workflows/enforce-server-authority.yml || true
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "chore: remove authority patch workflow"
+          git push origin main
