@@ -20,7 +20,6 @@ SET search_path=public,extensions,pg_temp
 AS $$
 DECLARE
   h BYTEA;
-  first_56 NUMERIC;
   first_52 NUMERIC;
   u NUMERIC;
 BEGIN
@@ -29,26 +28,22 @@ BEGIN
     'sha256'::TEXT
   );
 
-  -- First 7 bytes are an unsigned 56-bit value.
-  first_56 :=
-      get_byte(h, 0)::NUMERIC * 72057594037927936
-    + get_byte(h, 1)::NUMERIC * 281474976710656
-    + get_byte(h, 2)::NUMERIC * 1099511627776
-    + get_byte(h, 3)::NUMERIC * 4294967296
-    + get_byte(h, 4)::NUMERIC * 16777216
-    + get_byte(h, 5)::NUMERIC * 65536
-    + get_byte(h, 6)::NUMERIC * 256
-    + get_byte(h, 7)::NUMERIC;
-
-  -- Equivalent to taking the first 52 bits of the hash.
-  first_52 := floor(first_56 / 16::NUMERIC);
+  -- Exact first 52 bits of SHA-256, represented as an unsigned NUMERIC.
+  -- Bytes 0..5 contribute 44..4 bits; the high nibble of byte 6 contributes 4 bits.
+  first_52 :=
+      get_byte(h, 0)::NUMERIC * 17592186044416
+    + get_byte(h, 1)::NUMERIC * 68719476736
+    + get_byte(h, 2)::NUMERIC * 268435456
+    + get_byte(h, 3)::NUMERIC * 1048576
+    + get_byte(h, 4)::NUMERIC * 4096
+    + get_byte(h, 5)::NUMERIC * 16
+    + floor(get_byte(h, 6)::NUMERIC / 16);
 
   -- 2^52 = 4503599627370496.
   u := first_52 / 4503599627370496::NUMERIC;
 
-  -- Keep U strictly below 1 to avoid division by zero.
   IF u >= 1::NUMERIC THEN
-    u := (4503599627370495::NUMERIC) / 4503599627370496::NUMERIC;
+    u := 4503599627370495::NUMERIC / 4503599627370496::NUMERIC;
   END IF;
 
   RETURN greatest(
