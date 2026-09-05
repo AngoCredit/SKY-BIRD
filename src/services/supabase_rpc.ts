@@ -55,13 +55,53 @@ export async function serverRevealRoundSeed(roundId:string):Promise<RevealSeedRe
   return {round_id:data.round_id,round_number:Number(data.round_number),server_seed:data.server_seed,server_seed_hash:data.server_seed_hash,client_seed:data.client_seed,nonce:Number(data.nonce),crash_point:Number(data.crash_point),status:data.status};
 }
 
+/**
+ * Reads the public round exclusively through the safe RPC.
+ * The browser no longer subscribes directly to game_rounds, avoiding exposure
+ * of server_seed/crash_point through Realtime payloads.
+ */
 export function subscribeToCurrentRound(onRoundChange:(round:any)=>void){
   if(!isSupabaseConfigured)return()=>{};
-  const channel=supabase.channel('game_rounds_current').on('postgres_changes',{event:'*',schema:'public',table:'game_rounds'},payload=>{
-    const row:any=payload.new;if(!row)return;
-    onRoundChange({id:row.id,round_number:Number(row.round_number),status:row.status,server_seed_hash:row.server_seed_hash,client_seed:row.client_seed,nonce:Number(row.nonce),crash_point:['CRASHED','SETTLED'].includes(row.status)?Number(row.crash_point):undefined,started_at:row.started_at,ended_at:row.ended_at,total_bets_amount:Number(row.total_bets_amount??0),total_payout_amount:Number(row.total_payout_amount??0)});
-  }).subscribe();
-  return()=>{void supabase.removeChannel(channel);};
+  let stopped=false;
+  let timer:ReturnType<typeof setTimeout>|null=null;
+  let lastRoundKey='';
+
+  const poll=async()=>{
+    if(stopped)return;
+    try{
+      const {data,error}=await supabase.rpc('get_current_round');
+      if(!error&&data){
+        const round={
+          id:data.id,
+          round_number:Number(data.round_number),
+          status:data.status,
+          server_seed_hash:data.server_seed_hash,
+          client_seed:data.client_seed,
+          nonce:Number(data.nonce),
+          crash_point:['CRASHED','SETTLED'].includes(data.status)&&data.crash_point!=null?Number(data.crash_point):undefined,
+          started_at:data.started_at,
+          ended_at:data.ended_at,
+          total_bets_amount:Number(data.total_bets_amount??0),
+          total_payout_amount:Number(data.total_payout_amount??0)
+        };
+        const key=`${round.id}:${round.status}:${round.started_at??''}:${round.ended_at??''}:${round.crash_point??''}:${round.total_bets_amount}:${round.total_payout_amount}`;
+        if(key!==lastRoundKey){
+          lastRoundKey=key;
+          onRoundChange(round);
+        }
+      }
+    }catch(error){
+      console.warn('[Supabase] current round polling failed:',error);
+    }finally{
+      if(!stopped)timer=setTimeout(poll,750);
+    }
+  };
+
+  void poll();
+  return()=>{
+    stopped=true;
+    if(timer)clearTimeout(timer);
+  };
 }
 
 export function subscribeToWalletChanges(userId:string,onBalanceChange:(availableBalance:number,lockedBalance:number)=>void){
