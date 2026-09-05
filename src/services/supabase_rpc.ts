@@ -326,10 +326,21 @@ export async function serverCashoutBet(params: {
   _pendingCashouts.set(lockKey, true);
 
   try {
-    const { data, error } = await supabase.rpc('cashout_bet', {
+    const currentUserId = store.getCurrentUser()?.id;
+    let { data, error } = await supabase.rpc('cashout_bet', {
       p_bet_id:     params.betId,
-      p_multiplier: params.multiplier
+      p_multiplier: params.multiplier,
+      p_user_id:    currentUserId && currentUserId !== 'usr_guest' ? currentUserId : null
     });
+
+    if (error && error.message.includes('Could not find the function')) {
+      const retryWithoutUser = await supabase.rpc('cashout_bet', {
+        p_bet_id:     params.betId,
+        p_multiplier: params.multiplier
+      });
+      data = retryWithoutUser.data;
+      error = retryWithoutUser.error;
+    }
 
     if (error) {
       console.error('[RPC] cashout_bet error:', error.message);
@@ -837,5 +848,52 @@ export function subscribeToProfiles(onProfilesChange: (profile: any) => void) {
     try { supabase.removeChannel(_profilesChannel); } catch { /* safe */ }
     _profilesChannel = null;
   };
+}
+
+// ─────────────────────────────────────────────────────────
+// SERVER DELETE USER — Exclusão Server-Authoritative de Utilizador
+// Executa a RPC delete_user_admin ou limpa tabelas em cascata
+// ─────────────────────────────────────────────────────────
+
+export async function serverDeleteUser(userId: string): Promise<{ success: boolean; error?: string }> {
+  if (!isSupabaseConfigured) {
+    return { success: true };
+  }
+
+  try {
+    // 1. Tentar exclusão atómica via RPC delete_user_admin (PostgreSQL Security Definer)
+    const { data, error } = await supabase.rpc('delete_user_admin', {
+      p_user_id: userId
+    });
+
+    if (!error && data) {
+      console.log('[RPC] Utilizador eliminado com sucesso via RPC delete_user_admin:', userId);
+      return { success: true };
+    }
+
+    if (error) {
+      console.warn('[RPC] RPC delete_user_admin indisponível ou erro:', error.message, '— A tentar exclusão direta por tabelas...');
+    }
+
+    // 2. Fallback: Exclusão em cascata pelas tabelas públicas
+    await supabase.from('bets').delete().eq('user_id', userId).then(null, () => null);
+    await supabase.from('ledger_transactions').delete().eq('user_id', userId).then(null, () => null);
+    await supabase.from('support_messages').delete().or(`user_id.eq.${userId},sender_id.eq.${userId}`).then(null, () => null);
+    await supabase.from('wallets').delete().eq('user_id', userId).then(null, () => null);
+    await supabase.from('verification_requests').delete().eq('user_id', userId).then(null, () => null);
+    await supabase.from('idempotency_keys').delete().eq('user_id', userId).then(null, () => null);
+
+    // 3. Eliminar o perfil na tabela 'profiles' (NÃO 'users')
+    const { error: profileErr } = await supabase.from('profiles').delete().eq('id', userId);
+    if (profileErr) {
+      console.error('[Supabase] Erro ao eliminar perfil em profiles:', profileErr.message);
+      return { success: false, error: profileErr.message };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('[RPC] Exceção ao eliminar utilizador:', err.message);
+    return { success: false, error: err.message };
+  }
 }
 

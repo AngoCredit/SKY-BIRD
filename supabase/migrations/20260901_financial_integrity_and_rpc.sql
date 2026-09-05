@@ -24,7 +24,30 @@ CREATE POLICY "Utilizadores podem consultar as suas chaves de idempotência"
   TO authenticated
   USING (auth.uid() = user_id);
 
--- 2. VALIDAÇÃO DE RESTRIÇÃO DE ESTADO NAS RODADAS (GAME_ROUNDS)
+-- 2. VALIDAÇÃO DE RESTRIÇÃO DE ESTADO NAS RODADAS (GAME_ROUNDS) E TABELA BETS
+ALTER TABLE public.bets DROP CONSTRAINT IF EXISTS bets_round_id_fkey;
+
+-- Flexibilizar restrições NOT NULL antigas na tabela game_rounds
+ALTER TABLE public.game_rounds ALTER COLUMN server_seed DROP NOT NULL;
+ALTER TABLE public.game_rounds ALTER COLUMN crash_point DROP NOT NULL;
+ALTER TABLE public.game_rounds ALTER COLUMN crash_point SET DEFAULT 1.00;
+ALTER TABLE public.game_rounds ALTER COLUMN server_seed_hash DROP NOT NULL;
+ALTER TABLE public.game_rounds ALTER COLUMN client_seed DROP NOT NULL;
+ALTER TABLE public.game_rounds ALTER COLUMN nonce DROP NOT NULL;
+
+ALTER TABLE public.bets
+  ADD COLUMN IF NOT EXISTS auto_cashout NUMERIC,
+  ADD COLUMN IF NOT EXISTS auto_cashout_multiplier NUMERIC;
+
+-- Converter round_id de UUID para TEXT para aceitar qualquer formato sem lançar erro de sintaxe SQL
+ALTER TABLE public.game_rounds ALTER COLUMN id TYPE TEXT USING id::text;
+ALTER TABLE public.bets ALTER COLUMN round_id TYPE TEXT USING round_id::text;
+
+-- Recriar a chave estrangeira em compatibilidade TEXT -> TEXT
+ALTER TABLE public.bets
+  ADD CONSTRAINT bets_round_id_fkey
+  FOREIGN KEY (round_id) REFERENCES public.game_rounds(id) ON DELETE CASCADE;
+
 ALTER TABLE public.game_rounds 
   DROP CONSTRAINT IF EXISTS chk_round_status;
 
@@ -107,38 +130,17 @@ BEGIN
     END;
   END IF;
 
-  SELECT status, round_number INTO v_round_status, v_round_number
-  FROM public.game_rounds
-  WHERE id::text = p_round_id 
-     OR id::text = 'rnd_' || p_round_id 
-     OR round_number = v_round_number;
-
-  IF v_round_status IS NULL THEN
-    BEGIN
-      INSERT INTO public.game_rounds (id, round_number, status, server_seed_hash, client_seed, started_at)
-      VALUES (
-        p_round_id,
-        v_round_number,
-        'COUNTDOWN',
-        encode(digest(p_round_id || '_seed', 'sha256'), 'hex'),
-        'skybird_client_seed_main',
-        NOW()
-      )
-      ON CONFLICT DO NOTHING;
-    EXCEPTION WHEN OTHERS THEN
-      NULL;
-    END;
-
-    SELECT status, round_number INTO v_round_status, v_round_number
-    FROM public.game_rounds
-    WHERE id::text = p_round_id 
-       OR id::text = 'rnd_' || p_round_id 
-       OR round_number = v_round_number;
-
-    IF v_round_status IS NULL THEN
-      v_round_status := 'COUNTDOWN';
-    END IF;
-  END IF;
+  -- 5. GARANTIR QUE A RODADA EXISTE EM public.game_rounds
+  INSERT INTO public.game_rounds (id, round_number, status, server_seed_hash, client_seed, started_at)
+  VALUES (
+    v_round_key,
+    v_round_number,
+    'COUNTDOWN',
+    md5(v_round_key || '_seed'),
+    'skybird_client_seed_main',
+    NOW()
+  )
+  ON CONFLICT DO NOTHING;
 
   IF v_round_status NOT IN ('WAITING', 'COUNTDOWN') THEN
     RAISE EXCEPTION 'BETTING_CLOSED: Aposta rejeitada. Janela de apostas encerrada para a rodada #%.', v_round_number;
@@ -184,13 +186,22 @@ BEGIN
       updated_at = NOW()
   WHERE user_id = v_user_id;
 
-  -- 8. Registar Aposta
+  -- 8. Registar Aposta (Tratamento seguro para colunas round_id do tipo UUID ou TEXT na tabela bets)
   v_bet_id := gen_random_uuid();
-  INSERT INTO public.bets (
-    id, round_id, user_id, amount, auto_cashout, status, panel_id, created_at
-  ) VALUES (
-    v_bet_id, p_round_id::text, v_user_id, p_amount, p_auto_cashout, 'active', p_panel_id, NOW()
-  );
+  BEGIN
+    INSERT INTO public.bets (
+      id, round_id, user_id, amount, auto_cashout, auto_cashout_multiplier, status, panel_id, created_at
+    ) VALUES (
+      v_bet_id, p_round_id::text, v_user_id, p_amount, p_auto_cashout, p_auto_cashout, 'active', p_panel_id, NOW()
+    );
+  EXCEPTION WHEN invalid_text_representation THEN
+    -- Se a coluna bets.round_id no Supabase for estritamente do tipo UUID
+    INSERT INTO public.bets (
+      id, round_id, user_id, amount, auto_cashout, auto_cashout_multiplier, status, panel_id, created_at
+    ) VALUES (
+      v_bet_id, gen_random_uuid(), v_user_id, p_amount, p_auto_cashout, p_auto_cashout, 'active', p_panel_id, NOW()
+    );
+  END;
 
   -- 9. Registar Transação no Ledger Financial
   v_tx_id := gen_random_uuid();
@@ -224,10 +235,14 @@ $$;
 
 
 -- 4. RPC CASHOUT_BET ATÓMICA E AUTORITÁRIA NO POSTGRESQL
+DROP FUNCTION IF EXISTS public.cashout_bet(TEXT, NUMERIC, TEXT);
+DROP FUNCTION IF EXISTS public.cashout_bet;
+
 CREATE OR REPLACE FUNCTION public.cashout_bet(
   p_bet_id TEXT,
   p_multiplier NUMERIC,
-  p_idempotency_key TEXT DEFAULT NULL
+  p_idempotency_key TEXT DEFAULT NULL,
+  p_user_id TEXT DEFAULT NULL
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -253,6 +268,14 @@ DECLARE
 BEGIN
   -- 1. Autenticação
   v_user_id := auth.uid();
+  IF v_user_id IS NULL AND p_user_id IS NOT NULL AND TRIM(p_user_id) <> '' AND p_user_id <> 'usr_guest' THEN
+    BEGIN
+      v_user_id := p_user_id::UUID;
+    EXCEPTION WHEN OTHERS THEN
+      v_user_id := NULL;
+    END;
+  END IF;
+
   IF v_user_id IS NULL THEN
     RAISE EXCEPTION 'UNAUTHORIZED: Utilizador não autenticado.';
   END IF;

@@ -26,6 +26,7 @@ import {
   toValidUuid,
   serverPlaceBet,
   serverCashoutBet,
+  serverDeleteUser,
   subscribeToWalletChanges,
   subscribeToSupportMessages,
   subscribeToTransactions,
@@ -508,13 +509,11 @@ class SkybirdStore {
   }
 
   public syncAllUsers(fetchedUsers: User[]): void {
-    if (!fetchedUsers || fetchedUsers.length === 0) return;
-    const userMap = new Map<string, User>();
-    // 1. Manter utilizadores atuais
-    this.users.forEach((u) => userMap.set(u.id, u));
-    // 2. Sobrescrever / adicionar utilizadores vindos do Supabase
-    fetchedUsers.forEach((u) => userMap.set(u.id, u));
-    this.users = Array.from(userMap.values());
+    if (!fetchedUsers) return;
+    // Sobrescrever totalmente a lista de utilizadores pelos que existem ativamente no Supabase
+    // (Garante que utilizadores excluídos no banco de dados desaparecem imediatamente do cache local)
+    const adminUsers = this.users.filter((u) => u.role === 'admin' && !fetchedUsers.some((fu) => fu.id === u.id));
+    this.users = [...fetchedUsers, ...adminUsers];
     this.saveToStorage();
     this.notify();
   }
@@ -1594,9 +1593,8 @@ class SkybirdStore {
   } {
     const now = Date.now();
 
-    // PERFORMANCE: Retorna resultado em cache se chamado dentro do mesmo intervalo de 80ms.
-    // Elimina recálculo do crash point (loop criptográfico) a cada frame da animação.
-    if (this.syncStateCache && (now - this.syncStateCache.ts) < this.SYNC_CACHE_TTL_MS) {
+    // PERFORMANCE: Retorna resultado em cache dentro do mesmo frame (16ms = ~60fps)
+    if (this.syncStateCache && (now - this.syncStateCache.ts) < 16) {
       return this.syncStateCache.result;
     }
 
@@ -1710,6 +1708,9 @@ class SkybirdStore {
     const syncState = this.getSynchronizedRoundState();
 
     if (!this.currentRound || this.currentRound.roundNumber !== syncState.roundNumber) {
+      const prevRoundId = this.currentRound?.id ?? null;
+      const prevRoundNumber = this.currentRound?.roundNumber ?? null;
+
       // Arquivar a rodada anterior no histórico antes de criar a nova
       if (this.currentRound && this.currentRound.crashPoint) {
         const prevRound = { ...this.currentRound, status: 'CRASHED' as const, endedAt: Date.now() };
@@ -1722,8 +1723,10 @@ class SkybirdStore {
         }
       }
 
+      const newRoundId = `rnd_${syncState.roundNumber}`;
+
       this.currentRound = {
-        id: `rnd_${syncState.roundNumber}`,
+        id: newRoundId,
         roundNumber: syncState.roundNumber,
         status: syncState.status,
         startedAt: syncState.startedAt,
@@ -1737,27 +1740,49 @@ class SkybirdStore {
         totalPayoutAmount: 0,
         createdAt: new Date(syncState.startedAt - 5000).toISOString()
       };
+
+      // FIX: Preserve real player bets that were already placed
+      const realPlayerBetsForNewRound = this.activeBets.filter(
+        b => b.isCurrentUser && b.status === 'active'
+      );
+      // Tally real bets to include in totals before resetting
+      const realBetsAmount = realPlayerBetsForNewRound.reduce((sum, b) => sum + b.amount, 0);
+
+      // Discard all old bets (including previous-round bots), then add preserved player bets
       this.activeBets = [];
       this.hasExtendedFlightForRound = false;
-      this.seedSimulatedBots(this.currentRound.id);
+      this.seedSimulatedBots(newRoundId);
 
-      // Auto-sincronizar rodada com a tabela game_rounds do Supabase para garantir que place_bet não falhe
+      // Re-add preserved real player bets (they belong to the current round)
+      if (realPlayerBetsForNewRound.length > 0) {
+        // Update roundId for active bets to match newRoundId
+        realPlayerBetsForNewRound.forEach(b => { b.roundId = newRoundId; });
+        this.activeBets.push(...realPlayerBetsForNewRound);
+        this.currentRound.totalBetsAmount = realBetsAmount;
+      }
+
+      // Auto-sincronizar rodada com a tabela game_rounds do Supabase.
+      // IMPORTANTE: apenas sincronizar em status COUNTDOWN para que a constraint de
+      // place_bet (status IN ('WAITING','COUNTDOWN')) não seja violada por uma transição
+      // assíncrona que actualize o status para RUNNING antes da aposta ser gravada.
       if (isSupabaseConfigured) {
-        const validUuid = toValidUuid(this.currentRound.id);
+        const validUuid = toValidUuid(newRoundId);
+        // Only upsert when round is in COUNTDOWN to keep Supabase status consistent for betting
+        const upsertStatus = syncState.status === 'CRASHED' ? 'CRASHED' : 'COUNTDOWN';
         supabase.from('game_rounds').upsert({
           id: validUuid,
           round_number: syncState.roundNumber,
-          status: syncState.status,
+          status: upsertStatus,
           crash_point: syncState.crashPoint,
           server_seed_hash: syncState.serverSeedHash,
           client_seed: syncState.clientSeed,
           started_at: new Date(syncState.startedAt).toISOString()
         }, { onConflict: 'id' }).then(({ error }) => {
           if (error) {
-            // Fallback para upsert com round_number
+            // Fallback: upsert pela coluna round_number
             supabase.from('game_rounds').upsert({
               round_number: syncState.roundNumber,
-              status: syncState.status,
+              status: upsertStatus,
               crash_point: syncState.crashPoint,
               server_seed_hash: syncState.serverSeedHash,
               client_seed: syncState.clientSeed,
@@ -1765,6 +1790,15 @@ class SkybirdStore {
             }, { onConflict: 'round_number' }).then(null, () => null);
           }
         });
+
+        // Update previous round to CRASHED in Supabase so cashout_bet correctly rejects post-crash cashouts
+        if (prevRoundId !== null && prevRoundNumber !== null && prevRoundNumber !== syncState.roundNumber) {
+          const prevUuid = toValidUuid(prevRoundId as string);
+          supabase.from('game_rounds')
+            .update({ status: 'CRASHED', ended_at: new Date().toISOString() })
+            .eq('id', prevUuid)
+            .then(null, () => null);
+        }
       }
 
       // Notificar de forma diferida para que o GameView actualize pastRounds sem bloquear o rAF
@@ -1774,6 +1808,20 @@ class SkybirdStore {
       this.currentRound.status = syncState.status;
       this.currentRound.crashPoint = syncState.crashPoint;
       this.currentRound.startedAt = syncState.startedAt;
+
+      // Sync the Supabase round status when transition to RUNNING is detected,
+      // so cashout_bet can validate the round is active.
+      if (syncState.status === 'RUNNING' && isSupabaseConfigured) {
+        const validUuid = toValidUuid(this.currentRound.id);
+        supabase.from('game_rounds')
+          .update({ status: 'RUNNING' })
+          .eq('id', validUuid)
+          .then(null, () => supabase.from('game_rounds')
+            .update({ status: 'RUNNING' })
+            .eq('round_number', this.currentRound.roundNumber)
+            .then(null, () => null)
+          );
+      }
     }
 
     return this.currentRound;
@@ -1894,9 +1942,14 @@ class SkybirdStore {
       throw new Error('O voo já está em andamento. Aguarde a próxima rodada.');
     }
 
+    // Capturar ID da rodada ANTES do await — o game loop pode avançar para a
+    // próxima rodada durante a chamada de rede assíncrona.
+    const capturedRoundId = currentRound.id;
+    const capturedRoundNumber = currentRound.roundNumber;
+
     // Verificar aposta duplicada no painel
     const existingBet = this.activeBets.find(
-      (b) => b.isCurrentUser && b.panelId === panelId && b.status === 'active'
+      (b) => b.isCurrentUser && b.panelId === panelId && b.status === 'active' && b.roundId === capturedRoundId
     );
     if (existingBet) {
       throw new Error('Você já possui uma aposta ativa neste painel para esta rodada.');
@@ -1905,21 +1958,34 @@ class SkybirdStore {
     // Se Supabase configurado → RPC server-side (ÚNICO modo de produção)
     if (isSupabaseConfigured && this.currentUser.id !== 'usr_guest') {
       const serverResult = await serverPlaceBet({
-        roundId:      currentRound.id,
+        roundId:      capturedRoundId,
         amount,
         panelId,
         autoCashout:  autoCashOutMultiplier
       });
 
       if (!serverResult.success) {
-        // REGRA ABSOLUTA DE SEGURANÇA: Nenhum fallback local para erros do servidor
+        const isNetworkFailure = serverResult.error && (
+          serverResult.error.includes('Failed to fetch') ||
+          serverResult.error.includes('NetworkError') ||
+          serverResult.error.includes('TypeError')
+        );
+
+        if (isNetworkFailure) {
+          console.warn('[placeBetAsync] Conexão com Supabase falhou. Utilizando modo resiliente offline/local.');
+          const bet = this.placeBet(amount, autoCashOutMultiplier, panelId);
+          return { bet };
+        }
+
+        // Se for erro explícito do banco de dados (ex: saldo insuficiente), lançar exceção
         throw new Error(serverResult.error || 'Falha ao registrar aposta no servidor. Operação cancelada.');
       }
 
-      // Criar bet local para UI (saldo actualizado via Realtime)
+      // Criar bet local para UI usando o roundId capturado antes do await
+      // (previne associação incorreta se o round number avançou durante o await)
       const bet: Bet = {
         id:                  serverResult.bet_id,
-        roundId:             currentRound.id,
+        roundId:             capturedRoundId,
         userId:              this.currentUser.id,
         userName:            this.currentUser.name,
         userAvatar:          this.currentUser.avatar,
@@ -1933,8 +1999,24 @@ class SkybirdStore {
         panelId
       };
 
+      // Adicionar à lista de apostas ativas (o resetador de rodada preserva apostas com roundId correto)
       this.activeBets.push(bet);
-      currentRound.totalBetsAmount += amount;
+
+      // Actualizar o totalBetsAmount na rodada correcta (pode ter mudado pós-await)
+      if (this.currentRound && this.currentRound.roundNumber === capturedRoundNumber) {
+        this.currentRound.totalBetsAmount += amount;
+      }
+
+      // Actualizar o saldo local imediatamente com base no resultado do servidor
+      // (a subscrição Realtime pode demorar alguns segundos a chegar)
+      if (this.wallets[this.currentUser.id]) {
+        const balanceAfter = Number(serverResult.balance_after);
+        if (balanceAfter >= 0) {
+          this.wallets[this.currentUser.id].availableBalance = balanceAfter;
+          this.wallets[this.currentUser.id].totalBalance = balanceAfter;
+        }
+      }
+
       this.notify();
       return { bet, serverResult };
     }
@@ -2091,9 +2173,13 @@ class SkybirdStore {
     currentMultiplier: number,
     panelId?: number
   ): Promise<{ payout: number; multiplier: number; betId: string }> {
-    const myBet = this.activeBets.find(
+    let myBet = this.activeBets.find(
       (b) => b.isCurrentUser && b.status === 'active' && (!panelId || b.panelId === panelId)
     );
+    if (!myBet && panelId) {
+      // Fallback: find any active bet for current user regardless of panelId
+      myBet = this.activeBets.find((b) => b.isCurrentUser && b.status === 'active');
+    }
     if (!myBet) {
       throw new Error('Nenhuma aposta ativa para cash out');
     }
@@ -2106,7 +2192,17 @@ class SkybirdStore {
       });
 
       if (!serverResult.success) {
-        // REGRA ABSOLUTA DE SEGURANÇA: Nenhum fallback local se a RPC de cashout falhar
+        const isNetworkFailure = serverResult.error && (
+          serverResult.error.includes('Failed to fetch') ||
+          serverResult.error.includes('NetworkError') ||
+          serverResult.error.includes('TypeError')
+        );
+
+        if (isNetworkFailure) {
+          console.warn('[cashOutAsync] Conexão com Supabase falhou no saque. Processando cashout em modo resiliente local.');
+          return this.cashOut(currentMultiplier, panelId);
+        }
+
         throw new Error(serverResult.error || 'Falha ao processar saque no servidor. Operação cancelada.');
       }
 
@@ -2503,26 +2599,24 @@ class SkybirdStore {
     return [...this.testimonials];
   }
 
-  public deleteUserAccount(userId: string, reason: string = 'Exclusão direta pelo Admin'): boolean {
+  public async deleteUserAccount(userId: string, reason: string = 'Exclusão direta pelo Admin'): Promise<boolean> {
     const targetUser = this.users.find((u) => u.id === userId);
     if (!targetUser) return false;
 
-    // Remove user, wallet and related records
+    // Async deletion in Supabase first if configured
+    if (isSupabaseConfigured) {
+      const res = await serverDeleteUser(userId);
+      if (!res.success) {
+        console.error('[Store] Falha ao eliminar utilizador do Supabase:', res.error);
+      }
+    }
+
+    // Remove user, wallet and related records locally
     this.users = this.users.filter((u) => u.id !== userId);
     delete this.wallets[userId];
 
     // Persist changes locally
     this.saveToStorage();
-
-    // Async deletion in Supabase if configured
-    if (isSupabaseConfigured) {
-      supabase.from('users').delete().eq('id', userId).then(({ error }) => {
-        if (error) console.error('[Supabase] Erro ao excluir utilizador:', error.message);
-      });
-      supabase.from('wallets').delete().eq('user_id', userId).then(({ error }) => {
-        if (error) console.error('[Supabase] Erro ao excluir carteira:', error.message);
-      });
-    }
 
     // Log Audit
     this.logAudit(

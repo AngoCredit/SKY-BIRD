@@ -242,7 +242,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         .then(({ data, error }) => {
           if (error) {
             console.warn('[AdminDashboard] Erro ao procurar perfis no Supabase:', error);
-          } else if (data && data.length > 0) {
+          } else if (data) {
             const fetchedUsers: User[] = data.map((profileData: any) => ({
               id: profileData.id,
               name: profileData.name || 'Jogador',
@@ -640,11 +640,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               </button>
                               {u.id !== currentUser.id && (
                                 <button
-                                  onClick={() => {
+                                  onClick={async () => {
                                     const confirmDelete = window.confirm(`Tem certeza que deseja EXCLUIR permanentemente a conta de ${u.name} (${u.email})? Esta ação não pode ser desfeita.`);
                                     if (confirmDelete) {
-                                      store.deleteUserAccount(u.id, 'Exclusão executada pelo Painel Admin');
-                                      audioManager.playNotification();
+                                      const ok = await store.deleteUserAccount(u.id, 'Exclusão executada pelo Painel Admin');
+                                      if (ok) {
+                                        showAdminToast('🗑️ Utilizador Eliminado', `A conta de ${u.name} (${u.email}) foi eliminada com sucesso.`);
+                                        audioManager.playNotification();
+                                      } else {
+                                        showAdminToast('⚠️ Erro ao Eliminar', `Não foi possível eliminar a conta de ${u.name}.`);
+                                      }
                                     }
                                   }}
                                   className="px-2.5 py-1 rounded bg-red-950/80 hover:bg-red-900 text-red-300 hover:text-white text-[11px] cursor-pointer flex items-center gap-1 border border-red-500/30 transition"

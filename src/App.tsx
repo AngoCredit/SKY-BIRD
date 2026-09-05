@@ -212,6 +212,40 @@ export function App() {
     return () => unsub();
   }, []);
 
+  // ── 5-Minute Inactivity Auto-Logout for Admin Sessions ─────────────────────
+  useEffect(() => {
+    if (currentUser.role !== 'admin' || (currentView !== 'admin' && currentView !== 'admin-login')) {
+      return;
+    }
+
+    const INACTIVITY_LIMIT_MS = 5 * 60 * 1000; // 5 minutos
+    let inactivityTimer: ReturnType<typeof setTimeout>;
+
+    const resetInactivityTimer = () => {
+      clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        console.warn('[Admin Security] 5 minutos sem atividade detectados. Desconectando admin...');
+        store.logoutAdmin();
+        if (isSupabaseConfigured) {
+          supabase.auth.signOut().catch(() => {});
+        }
+        setCurrentView('admin-login');
+      }, INACTIVITY_LIMIT_MS);
+    };
+
+    // Events to track user activity (mouse movement, keypresses, clicks, touches)
+    const activityEvents = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
+    activityEvents.forEach(evt => window.addEventListener(evt, resetInactivityTimer, { passive: true }));
+
+    // Start timer on mount
+    resetInactivityTimer();
+
+    return () => {
+      clearTimeout(inactivityTimer);
+      activityEvents.forEach(evt => window.removeEventListener(evt, resetInactivityTimer));
+    };
+  }, [currentUser.role, currentView]);
+
   // Hash Navigation Handler (supports bookmarking #admin-login, #admin, etc.)
   useEffect(() => {
     const handleHash = () => {

@@ -440,11 +440,11 @@ export const SkybirdCanvas: React.FC<SkybirdCanvasProps> = React.memo(({
           lastStatus = curStatus;
         }
 
-        // 1. Flight Speed & Velocity scaling
+        // 1. Flight Speed & Velocity scaling strictly bound to synchronized status
         let flightSpeed = 0.5;
         if (curStatus === 'RUNNING') {
           flightSpeed = 1.0 + Math.min(curMult * 0.8, 25.0);
-        } else if (curStatus === 'CRASHED') {
+        } else if (curStatus === 'CRASHED' || curStatus === 'COUNTDOWN' || curStatus === 'WAITING') {
           flightSpeed = 0.1;
         }
 

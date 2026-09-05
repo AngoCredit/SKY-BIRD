@@ -202,3 +202,45 @@ $$;
 -- Permissões de Execução
 GRANT EXECUTE ON FUNCTION public.place_bet TO authenticated;
 GRANT EXECUTE ON FUNCTION public.place_bet TO anon;
+
+-- =============================================================================
+-- 4. RPC: EXCLUSÃO ATÓMICA DE UTILIZADOR PELO ADMIN (delete_user_admin)
+-- =============================================================================
+CREATE OR REPLACE FUNCTION public.delete_user_admin(p_user_id TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_uuid UUID;
+BEGIN
+  BEGIN
+    v_uuid := p_user_id::UUID;
+  EXCEPTION WHEN OTHERS THEN
+    v_uuid := NULL;
+  END;
+
+  -- 1. Eliminar registos dependentes para evitar violação de Foreign Key
+  DELETE FROM public.bets WHERE user_id::text = p_user_id;
+  DELETE FROM public.ledger_transactions WHERE user_id::text = p_user_id;
+  DELETE FROM public.support_messages WHERE user_id::text = p_user_id OR sender_id::text = p_user_id;
+  DELETE FROM public.idempotency_keys WHERE user_id::text = p_user_id;
+  DELETE FROM public.verification_requests WHERE user_id::text = p_user_id;
+  DELETE FROM public.wallets WHERE user_id::text = p_user_id;
+  DELETE FROM public.profiles WHERE id::text = p_user_id;
+
+  -- 2. Eliminar do auth.users se for um UUID válido
+  IF v_uuid IS NOT NULL THEN
+    BEGIN
+      DELETE FROM auth.users WHERE id = v_uuid;
+    EXCEPTION WHEN OTHERS THEN
+      NULL;
+    END;
+  END IF;
+
+  RETURN TRUE;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.delete_user_admin(TEXT) TO anon, authenticated, service_role;
+

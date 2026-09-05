@@ -173,32 +173,44 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
     const activeRef = isP1 ? hasActiveBet1Ref : hasActiveBet2Ref;
     const cashedRef = isP1 ? hasCashedOut1Ref : hasCashedOut2Ref;
 
-    // Verificar se o voo está verdadeiramente em andamento no motor sincronizado
-    const currentSyncRound = store.getCurrentRound();
-    if (!activeRef.current || cashedRef.current || currentSyncRound.status !== 'RUNNING') {
+    // Guard check: active bet must exist, not already cashed out, and flight MUST be running
+    const currentRound = store.getCurrentRound();
+    if (!activeRef.current || cashedRef.current || currentRound.status !== 'RUNNING') {
       return;
     }
 
     // Marcar imediatamente para evitar duplo click
     cashedRef.current = true;
 
+    const currentMult = multiplierRef.current || 1.00;
+    const activeBet = store.getActiveBets().find(b => b.isCurrentUser && b.status === 'active');
+    const estimatedPayout = activeBet ? Math.round(activeBet.amount * currentMult * 100) / 100 : 0;
+
+    // 🚀 OPTIMISTIC UPDATE: Atualiza a interface INSTANTANEAMENTE ao clicar (0ms de atraso visual)
+    if (isP1) {
+      setHasCashedOut1(true);
+      setCashedOutMultiplier1(currentMult);
+      setCashedOutPayout1(estimatedPayout);
+    } else {
+      setHasCashedOut2(true);
+      setCashedOutMultiplier2(currentMult);
+      setCashedOutPayout2(estimatedPayout);
+    }
+
+    audioManager.playCashOut();
+
     try {
-      const currentMult = multiplierRef.current || 1.00;
-      // Usar cashOutAsync: se Supabase configurado, valida no servidor;
-      // caso contrário usa fallback local (dev sem Supabase)
+      // Processa a validação financeira e a atualização de saldo em segundo plano via RPC
       const result = await store.cashOutAsync(currentMult, panelId);
 
+      // Confirmar valores exatos retornados pelo servidor PostgreSQL
       if (isP1) {
-        setHasCashedOut1(true);
         setCashedOutMultiplier1(result.multiplier);
         setCashedOutPayout1(result.payout);
       } else {
-        setHasCashedOut2(true);
         setCashedOutMultiplier2(result.multiplier);
         setCashedOutPayout2(result.payout);
       }
-
-      audioManager.playCashOut();
 
       confetti({
         particleCount: 70,
@@ -207,9 +219,21 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
         colors: ['#22c55e', '#06b6d4', '#f59e0b', '#ec4899', '#3b82f6']
       });
     } catch (e) {
-      // Se falhar (ex: rodada já caiu no servidor), reverter o estado
+      // Se o servidor rejeitar (ex: rodada já caiu no banco), reverter estado otimista
       cashedRef.current = false;
-      console.warn('Cash out error:', e);
+      if (isP1) {
+        setHasCashedOut1(false);
+        setCashedOutMultiplier1(null);
+        setCashedOutPayout1(null);
+      } else {
+        setHasCashedOut2(false);
+        setCashedOutMultiplier2(null);
+        setCashedOutPayout2(null);
+      }
+
+      const errMsg = e instanceof Error ? e.message : String(e);
+      console.warn('Cash out error:', errMsg);
+      alert(`Falha no Cash Out: ${errMsg}`);
     }
   }, []);
 
@@ -359,12 +383,17 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
   useEffect(() => {
     let loopId: number;
 
-    const gameLoop = (timestamp: number) => {
-      const TICK_INTERVAL_MS = 100; // Throttle estado pesado a 10x/seg
+    const gameLoop = () => {
+      // ── ESTADO E MULTIPLICADOR DO JOGO a 60fps em tempo real ──────────────────
+      const syncState = store.getSynchronizedRoundState();
+      lastSyncStateRef.current = syncState;
+      const activeRound = store.getCurrentRound();
 
-      // ── AUTO-CASHOUT a 60fps (usa apenas refs, zero cálculo pesado) ──────────
-      const curMult = multiplierRef.current;
-      if (currentRoundRef.current.status === 'RUNNING') {
+      const curMult = syncState.currentMultiplier;
+      multiplierRef.current = curMult;
+
+      // ── AUTO-CASHOUT a 60fps ──────────────────────────────────────────────────
+      if (syncState.status === 'RUNNING') {
         if (
           hasActiveBet1Ref.current &&
           !hasCashedOut1Ref.current &&
@@ -383,24 +412,7 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
         }
       }
 
-      // ── ESTADO DO JOGO throttlado a 10x/seg ─────────────────────────────────
-      if (timestamp - lastStateTickRef.current < TICK_INTERVAL_MS) {
-        loopId = requestAnimationFrame(gameLoop);
-        return;
-      }
-      lastStateTickRef.current = timestamp;
-
-      const syncState = store.getSynchronizedRoundState();
-      lastSyncStateRef.current = syncState;
-      const activeRound = store.getCurrentRound();
-
       if (syncState.status === 'COUNTDOWN') {
-        // Trigger auto/queued bets exatamente uma vez por rodada
-        if (syncState.roundNumber !== lastAutoBetRoundRef.current) {
-          lastAutoBetRoundRef.current = syncState.roundNumber;
-          triggerAutoBets();
-        }
-
         // Som de countdown por segundo (sem disparar no mesmo segundo)
         if (syncState.countdownRemaining !== lastCountdownSecRef.current) {
           lastCountdownSecRef.current = syncState.countdownRemaining;
@@ -408,34 +420,48 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
         }
         setCountdown(syncState.countdownRemaining);
 
-        if (currentRoundRef.current.roundNumber !== syncState.roundNumber || currentRoundRef.current.status !== 'COUNTDOWN') {
+        const isNewRound = currentRoundRef.current.roundNumber !== syncState.roundNumber;
+        const wasNotCountdown = currentRoundRef.current.status !== 'COUNTDOWN';
+
+        if (isNewRound || wasNotCountdown) {
           setCurrentRound(activeRound);
           currentRoundRef.current = activeRound;
           setMultiplier(1.00);
           multiplierRef.current = 1.00;
 
-          // Reset Panel 1
-          hasActiveBet1Ref.current = false;
-          isPlacingBet1Ref.current = false;
-          hasCashedOut1Ref.current = false;
-          setHasActiveBet1(false);
-          setHasCashedOut1(false);
-          setCashedOutMultiplier1(null);
-          setCashedOutPayout1(null);
+          // Reset Panel 1 — para a nova rodada
+          if (!isPlacingBet1Ref.current) {
+            hasCashedOut1Ref.current = false;
+            hasActiveBet1Ref.current = false;
+            setHasActiveBet1(false);
+            setBetAmount1(0);
+            setHasCashedOut1(false);
+            setCashedOutMultiplier1(null);
+            setCashedOutPayout1(null);
+          }
 
-          // Reset Panel 2
-          hasActiveBet2Ref.current = false;
-          isPlacingBet2Ref.current = false;
-          hasCashedOut2Ref.current = false;
-          setHasActiveBet2(false);
-          setHasCashedOut2(false);
-          setCashedOutMultiplier2(null);
-          setCashedOutPayout2(null);
+          // Reset Panel 2 — para a nova rodada
+          if (!isPlacingBet2Ref.current) {
+            hasCashedOut2Ref.current = false;
+            hasActiveBet2Ref.current = false;
+            setHasActiveBet2(false);
+            setBetAmount2(0);
+            setHasCashedOut2(false);
+            setCashedOutMultiplier2(null);
+            setCashedOutPayout2(null);
+          }
+        }
+
+        // Trigger auto/queued bets exactamente uma vez por rodada (após o reset dos painéis)
+        if (syncState.roundNumber !== lastAutoBetRoundRef.current) {
+          lastAutoBetRoundRef.current = syncState.roundNumber;
+          triggerAutoBets();
         }
       } else if (syncState.status === 'RUNNING') {
         if (currentRoundRef.current.status !== 'RUNNING' || currentRoundRef.current.roundNumber !== syncState.roundNumber) {
-          setCurrentRound(activeRound);
-          currentRoundRef.current = activeRound;
+          const updatedRound = { ...activeRound, status: 'RUNNING' as const };
+          setCurrentRound(updatedRound);
+          currentRoundRef.current = updatedRound;
           try { audioManager.playCountdown(true); } catch {}
           try { audioManager.startFlightAmbient(); } catch {}
         }
@@ -449,16 +475,23 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
         store.triggerBotCashouts(calculatedMult);
       } else if (syncState.status === 'CRASHED') {
         const finalPoint = syncState.crashPoint;
+
+        // Instantaneous synchronization: freeze multiplier at exact crash point
         setMultiplier(finalPoint);
         multiplierRef.current = finalPoint;
 
         if (currentRoundRef.current.status !== 'CRASHED' || currentRoundRef.current.roundNumber !== syncState.roundNumber) {
+          // 1. Immediately kill flight ambient & trigger atomic explosion audio
           try { audioManager.stopFlightAmbient(); } catch {}
           try { audioManager.playCrash(); } catch {}
+
+          // 2. Update store and state in sync
           store.endRound(finalPoint);
           const updated = { ...activeRound, status: 'CRASHED' as const, crashPoint: finalPoint };
           setCurrentRound(updated);
           currentRoundRef.current = updated;
+
+          // 3. Keep active bet state intact until next round COUNTDOWN reset
         }
       }
 
