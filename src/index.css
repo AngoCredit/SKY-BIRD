@@ -67,3 +67,58 @@
 .animate-pulse-glow {
   animation: pulseGlow 3s ease-in-out infinite;
 }
+
+/* Auth processing state: the existing disabled submit button gets a real
+   animated indicator without changing the modal's business logic. */
+@keyframes skybirdAuthSpin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes skybirdAuthShimmer {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 1; }
+}
+
+button[type="submit"][disabled] {
+  position: relative;
+  overflow: hidden;
+  cursor: wait !important;
+  filter: saturate(1.15);
+  animation: skybirdAuthShimmer 1.6s ease-in-out infinite;
+}
+
+button[type="submit"][disabled]::before {
+  content: "";
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 9px;
+  vertical-align: -2px;
+  border: 2px solid rgba(15, 23, 42, 0.35);
+  border-top-color: currentColor;
+  border-right-color: currentColor;
+  border-radius: 9999px;
+  animation: skybirdAuthSpin 0.7s linear infinite;
+}
+
+button[type="submit"][disabled]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 20%, rgba(255,255,255,0.16) 50%, transparent 80%);
+  transform: translateX(-100%);
+  animation: skybirdAuthSweep 1.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes skybirdAuthSweep {
+  to { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button[type="submit"][disabled],
+  button[type="submit"][disabled]::before,
+  button[type="submit"][disabled]::after {
+    animation: none;
+  }
+}
