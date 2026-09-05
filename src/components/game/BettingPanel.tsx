@@ -27,6 +27,7 @@ interface BettingPanelProps {
   onCancelBet?: (panelId: number) => void;
   onCancelQueuedBet?: (panelId: number) => void;
   onCashOut: (panelId: number) => void;
+  isProcessingCashOut?: boolean;
   onOpenDeposit: () => void;
   onRemovePanel?: () => void;
 }
@@ -54,6 +55,7 @@ export const BettingPanel: React.FC<BettingPanelProps> = ({
   onCancelBet,
   onCancelQueuedBet,
   onCashOut,
+  isProcessingCashOut = false,
   onOpenDeposit,
   onRemovePanel
 }) => {
@@ -201,21 +203,20 @@ export const BettingPanel: React.FC<BettingPanelProps> = ({
             </button>
           </div>
 
-          {/* Quick Preset Buttons (Optimized for small mobile displays) */}
-          <div className="grid grid-cols-5 gap-0.5 sm:gap-1">
-            {quickAmounts.map((amt) => (
+          {/* Quick Bet Buttons Bar */}
+          <div className="grid grid-cols-5 gap-1">
+            {[2, 5, 10, 25, 50].map((preset) => (
               <button
-                key={amt}
+                key={preset}
                 type="button"
-                onClick={() => handleQuickSelect(amt)}
-                disabled={isInputDisabled}
-                className={`py-0.5 sm:py-1 rounded bg-[#0e1219] hover:bg-[#1b2332] border text-[10px] sm:text-[11px] font-mono font-bold transition disabled:opacity-40 cursor-pointer text-center ${
-                  inputAmount === amt
-                    ? 'border-cyan-500/60 text-cyan-300 bg-[#162232]'
-                    : 'border-[#202837] text-slate-400 hover:text-slate-200'
+                onClick={() => setInputAmount(preset)}
+                className={`py-0.5 rounded text-[9px] sm:text-[10px] font-mono font-bold transition border cursor-pointer ${
+                  inputAmount === preset
+                    ? 'bg-cyan-950/80 border-cyan-500/80 text-cyan-300'
+                    : 'bg-[#020617] border-[#1e293b] text-slate-400 hover:text-slate-200 hover:border-slate-700'
                 }`}
               >
-                {amt}
+                {preset}
               </button>
             ))}
           </div>
@@ -229,15 +230,20 @@ export const BettingPanel: React.FC<BettingPanelProps> = ({
               id={`btn-cashout-panel-${panelId}`}
               type="button"
               onClick={() => onCashOut(panelId)}
-              className="w-full h-full min-h-[72px] rounded-xl bg-gradient-to-b from-[#eab308] via-[#ca8a04] to-[#a16207] hover:from-[#facc15] hover:to-[#ca8a04] active:scale-[0.98] text-slate-950 font-black border border-[#fef08a]/60 shadow-lg shadow-amber-950/50 flex flex-col items-center justify-center p-2 transition cursor-pointer animate-pulse"
+              disabled={isProcessingCashOut}
+              className={`w-full h-full min-h-[72px] rounded-xl font-black border flex flex-col items-center justify-center p-2 transition cursor-pointer ${
+                isProcessingCashOut
+                  ? 'bg-amber-700/80 text-amber-200 border-amber-500/50 cursor-wait animate-pulse'
+                  : 'bg-gradient-to-b from-[#eab308] via-[#ca8a04] to-[#a16207] hover:from-[#facc15] hover:to-[#ca8a04] active:scale-[0.98] text-slate-950 border-[#fef08a]/60 shadow-lg shadow-amber-950/50 animate-pulse'
+              }`}
             >
-              <span className="text-xs uppercase tracking-wider font-extrabold text-slate-900">
-                {t('game.cashout', 'SACAR')}
+              <span className="text-xs uppercase tracking-wider font-extrabold">
+                {isProcessingCashOut ? 'PROCESSANDO...' : t('game.cashout', 'SACAR')}
               </span>
               <span className="text-lg sm:text-xl font-black font-sans leading-none mt-0.5">
                 {currentPayout} {currencySymbol}
               </span>
-              <span className="text-[10px] font-mono font-bold text-slate-900/80">
+              <span className="text-[10px] font-mono font-bold">
                 @{currentMultiplier.toFixed(2)}x
               </span>
             </button>

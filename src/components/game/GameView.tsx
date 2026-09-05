@@ -167,50 +167,49 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
     ? 'STAGE_1_BLUE_SKY'
     : getAltitudeStage(multiplier);
 
+  // State tracking for in-flight cashout RPC processing
+  const [isProcessingCashOut1, setIsProcessingCashOut1] = useState<boolean>(false);
+  const [isProcessingCashOut2, setIsProcessingCashOut2] = useState<boolean>(false);
+  const isProcessingCashOut1Ref = useRef<boolean>(false);
+  const isProcessingCashOut2Ref = useRef<boolean>(false);
+
   // Handle cashout action for Panel 1 or Panel 2
   const handleCashOut = useCallback(async (panelId: number = 1) => {
     const isP1 = panelId === 1;
     const activeRef = isP1 ? hasActiveBet1Ref : hasActiveBet2Ref;
     const cashedRef = isP1 ? hasCashedOut1Ref : hasCashedOut2Ref;
+    const processingRef = isP1 ? isProcessingCashOut1Ref : isProcessingCashOut2Ref;
 
-    // Guard check: active bet must exist, not already cashed out, and flight MUST be running
+    // Guard check: active bet must exist, not already cashed out, not processing, and flight MUST be RUNNING
     const currentRound = store.getCurrentRound();
-    if (!activeRef.current || cashedRef.current || currentRound.status !== 'RUNNING') {
+    if (!activeRef.current || cashedRef.current || processingRef.current || currentRound.status !== 'RUNNING') {
       return;
     }
 
-    // Marcar imediatamente para evitar duplo click
-    cashedRef.current = true;
+    // 1. Enter PROCESSING state (prevents double-clicks without showing premature "LUCRO SACADO!")
+    processingRef.current = true;
+    if (isP1) setIsProcessingCashOut1(true);
+    else setIsProcessingCashOut2(true);
 
     const currentMult = multiplierRef.current || 1.00;
-    const activeBet = store.getActiveBets().find(b => b.isCurrentUser && b.status === 'active');
-    const estimatedPayout = activeBet ? Math.round(activeBet.amount * currentMult * 100) / 100 : 0;
-
-    // 🚀 OPTIMISTIC UPDATE: Atualiza a interface INSTANTANEAMENTE ao clicar (0ms de atraso visual)
-    if (isP1) {
-      setHasCashedOut1(true);
-      setCashedOutMultiplier1(currentMult);
-      setCashedOutPayout1(estimatedPayout);
-    } else {
-      setHasCashedOut2(true);
-      setCashedOutMultiplier2(currentMult);
-      setCashedOutPayout2(estimatedPayout);
-    }
-
-    audioManager.playCashOut();
 
     try {
-      // Processa a validação financeira e a atualização de saldo em segundo plano via RPC
+      // 2. Process financial validation and atomic balance update on PostgreSQL RPC FIRST
       const result = await store.cashOutAsync(currentMult, panelId);
 
-      // Confirmar valores exatos retornados pelo servidor PostgreSQL
+      // 3. REGRA ABSOLUTA: SÓ ATUALIZAR UI PARA "LUCRO SACADO!" APÓS CONFIRMAÇÃO DO SERVIDOR (success === true)
+      cashedRef.current = true;
       if (isP1) {
+        setHasCashedOut1(true);
         setCashedOutMultiplier1(result.multiplier);
         setCashedOutPayout1(result.payout);
       } else {
+        setHasCashedOut2(true);
         setCashedOutMultiplier2(result.multiplier);
         setCashedOutPayout2(result.payout);
       }
+
+      audioManager.playCashOut();
 
       confetti({
         particleCount: 70,
@@ -219,7 +218,7 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
         colors: ['#22c55e', '#06b6d4', '#f59e0b', '#ec4899', '#3b82f6']
       });
     } catch (e) {
-      // Se o servidor rejeitar (ex: rodada já caiu no banco), reverter estado otimista
+      // 4. SE O SERVIDOR REJEITAR (EX: CRASHED): NENHUMA ALTERAÇÃO FINANCEIRA OU VISUAL DE SUCESSO
       cashedRef.current = false;
       if (isP1) {
         setHasCashedOut1(false);
@@ -232,8 +231,11 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
       }
 
       const errMsg = e instanceof Error ? e.message : String(e);
-      console.warn('Cash out error:', errMsg);
-      alert(`Falha no Cash Out: ${errMsg}`);
+      console.warn('[GameView] Cash out rejected by server authority:', errMsg);
+    } finally {
+      processingRef.current = false;
+      if (isP1) setIsProcessingCashOut1(false);
+      else setIsProcessingCashOut2(false);
     }
   }, []);
 
@@ -663,6 +665,7 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
               onCancelBet={handleCancelBet}
               onCancelQueuedBet={handleCancelQueuedBet}
               onCashOut={handleCashOut}
+              isProcessingCashOut={isProcessingCashOut1}
               onOpenDeposit={onOpenDeposit}
             />
 
@@ -691,6 +694,7 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
                 onCancelBet={handleCancelBet}
                 onCancelQueuedBet={handleCancelQueuedBet}
                 onCashOut={handleCashOut}
+                isProcessingCashOut={isProcessingCashOut2}
                 onOpenDeposit={onOpenDeposit}
                 onRemovePanel={() => setShowSecondPanel(false)}
               />
