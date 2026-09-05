@@ -1,20 +1,5 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# SKY-BIRD
 
-# Run and deploy your AI Studio app
+Production hardening is being enforced through the server-authoritative game flow.
 
-This contains everything you need to run your app locally.
-
-View your app in AI Studio: https://ai.studio/apps/f47b2cd1-c03d-42ba-bf31-f46179d748ce
-
-## Run Locally
-
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+This marker commit intentionally triggers the repository security/build validation workflow.
