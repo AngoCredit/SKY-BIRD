@@ -1,7 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 
 // Project ID: efriqgvjtyxwqovobggq
-// URL derived from the PostgreSQL connection string provided
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://efriqgvjtyxwqovobggq.supabase.co';
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
@@ -15,7 +14,33 @@ if (!isSupabaseConfigured) {
   );
 }
 
+/**
+ * Prevent auth/profile requests from leaving the UI permanently stuck in a
+ * loading state when the browser loses connectivity or an upstream request
+ * never completes. The caller can still handle the timeout as a normal error.
+ */
+const REQUEST_TIMEOUT_MS = 12000;
+
+const fetchWithTimeout: typeof fetch = async (input, init) => {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timeout);
+  }
+};
+
 export const supabase = createClient(
   SUPABASE_URL,
-  SUPABASE_ANON_KEY || 'placeholder-key'
+  SUPABASE_ANON_KEY || 'placeholder-key',
+  {
+    global: {
+      fetch: fetchWithTimeout,
+    },
+  }
 );
