@@ -119,6 +119,21 @@ export function subscribeToActiveBets(roundId:string,onBetsChange:(bets:any[])=>
   return()=>{void supabase.removeChannel(channel);};
 }
 
+/**
+ * Support message realtime subscription used by the store/admin UI.
+ * Access is still enforced by the support_messages RLS policies in Supabase.
+ */
+export function subscribeToSupportMessages(onMessage:(message:any)=>void){
+  if(!isSupabaseConfigured)return()=>{};
+  const channel=supabase
+    .channel('support-messages')
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'support_messages'},payload=>{
+      onMessage(payload.new);
+    })
+    .subscribe();
+  return()=>{void supabase.removeChannel(channel);};
+}
+
 export async function uploadKYCDocument(userId:string,file:File,documentType:'id_document'|'selfie'){
   if(!isSupabaseConfigured)return{path:null,error:'Supabase não configurado.'};
   const extension=file.type==='application/pdf'?'pdf':'jpg';
