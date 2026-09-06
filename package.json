@@ -1,7 +1,7 @@
 {
-  "name": "react-example",
+  "name": "sky-bird",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
@@ -14,7 +14,7 @@
     "@google/genai": "^2.4.0",
     "@supabase/supabase-js": "^2.112.3",
     "@tailwindcss/vite": "^4.1.14",
-    "@types/canvas-confetti": "^1.9.0",
+    "@types/canvas-confetti": "^1.9.4",
     "@types/pg": "^8.23.1",
     "@types/three": "^0.185.4",
     "@vitejs/plugin-react": "^5.0.4",
