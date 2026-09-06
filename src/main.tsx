@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import { PasswordRecoveryPage } from './components/auth/PasswordRecoveryPage';
 import './index.css';
+import './auth-responsive.css';
 import './services/productionAuthorityPatch';
 import './services/productionSecurityPatch';
 import './services/productionHistoryPatch';
