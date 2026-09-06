@@ -17,6 +17,7 @@ import {
   subscribeToAuthoritativeRound,
   visualMultiplier,
 } from './authoritativeGame';
+import { getSimulatedLobbyBets } from './simulatedLobby';
 import { isSupabaseConfigured, supabase } from './supabase';
 import type { Bet, GameRound } from '../types';
 
@@ -49,12 +50,17 @@ function mapRound(round: AuthoritativeRound): GameRound {
 async function refreshBets(round: AuthoritativeRound | null) {
   if (!round) {
     latestBets = [];
+    store.notify();
     return;
   }
   try {
     latestBets = await getAuthoritativeRoundBets(round.id);
   } catch {
     latestBets = [];
+  } finally {
+    // Push server-bet changes into the React store subscription without making
+    // the browser responsible for any game/financial state transition.
+    store.notify();
   }
 }
 
@@ -63,6 +69,7 @@ function startAuthority() {
   unsubscribe = subscribeToAuthoritativeRound((round) => {
     authoritativeRound = round;
     void refreshBets(round);
+    store.notify();
   }, 500);
 }
 
@@ -193,7 +200,8 @@ store.cashOut = (() => {
   throw new Error('SERVER_AUTHORITY_REQUIRED');
 }) as any;
 
-// Expose only sanitized server bets to the UI; never invent browser-side bots.
+// Expose real server bets plus clearly labelled presentation-only bots.
+// Bots never enter PostgreSQL and are excluded from financial metrics.
 store.getActiveBets = (() => {
   const mapped = latestBets.map((b: any) => ({
     id: b.id,
@@ -209,8 +217,12 @@ store.getActiveBets = (() => {
     createdAt: b.createdAt,
     isCurrentUser: b.isCurrentUser,
     panelId: b.panelId,
-  }));
-  return mapped as Bet[];
+  })) as Bet[];
+
+  const round = authoritativeRound ? mapRound(authoritativeRound) : null;
+  const multiplier = authoritativeRound ? visualMultiplier(authoritativeRound) : 1;
+  const bots = getSimulatedLobbyBets(round, multiplier);
+  return [...mapped, ...bots];
 }) as any;
 
 void originalGetActiveBets;
