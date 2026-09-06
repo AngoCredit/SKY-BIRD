@@ -1,4 +1,4 @@
-import { getAuthoritativeRound, getVisualMultiplier } from './authoritativeGame';
+import { getAuthoritativeRound, visualMultiplier } from './authoritativeGame';
 
 /**
  * Production front-office guard.
@@ -78,14 +78,14 @@ async function refresh(panel: HTMLElement) {
 
     if (multiplier) {
       multiplier.textContent = formatMultiplier(
-        round.status === 'RUNNING' ? getVisualMultiplier(round) : Number(round.crashPoint || 1),
+        round.status === 'RUNNING' ? visualMultiplier(round) : Number(round.crashPoint || 1),
       );
       multiplier.style.color = round.status === 'CRASHED' ? '#fb7185' : '#22d3ee';
     }
 
     if (commitment) {
-      commitment.textContent = round.commitment
-        ? `Commitment SHA-256: ${round.commitment}`
+      commitment.textContent = round.serverSeedHash
+        ? `Commitment SHA-256: ${round.serverSeedHash}`
         : 'Commitment protegido pelo servidor';
     }
   } catch (error) {
