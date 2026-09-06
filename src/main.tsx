@@ -5,6 +5,7 @@ import { PasswordRecoveryPage } from './components/auth/PasswordRecoveryPage';
 import './index.css';
 import './services/productionAuthorityPatch';
 import './services/productionSecurityPatch';
+import './services/productionHistoryPatch';
 
 const recoveryRoute = window.location.hash.toLowerCase().replace('#', '') === 'recover-password';
 
