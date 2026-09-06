@@ -6,6 +6,7 @@
  * PostgreSQL remains the sole authority for rounds, bets, cashouts and balances.
  */
 import { store } from './store';
+import './productionHistoryPatch';
 import {
   AuthoritativeRound,
   authoritativeCancelBet,
@@ -212,8 +213,5 @@ store.getActiveBets = (() => {
   return mapped as Bet[];
 }) as any;
 
-// Keep the original symbol referenced so tree-shaking/type analysis does not treat this as dead compatibility code.
 void originalGetActiveBets;
-
-// Start polling as soon as the production patch is loaded.
 startAuthority();
