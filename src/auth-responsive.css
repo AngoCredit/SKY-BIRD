@@ -1,13 +1,21 @@
 /* SKY-BIRD authentication modal — mobile-first responsive corrections. */
 
 @media (max-width: 640px) {
-  /* The auth overlay must use the real mobile viewport and never create
-     horizontal overflow. */
-  #skybird-auth-modal {
+  /* The modal is identified by the existing close-button id, so no auth logic
+     or markup changes are required. */
+  .fixed.inset-0.z-50:has(#btn-close-auth) {
+    padding: 12px !important;
+    align-items: flex-start !important;
+    justify-content: center !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+
+  .fixed.inset-0.z-50:has(#btn-close-auth) > div {
     width: min(100%, 420px) !important;
     max-width: calc(100vw - 24px) !important;
     max-height: calc(100dvh - 24px) !important;
-    margin: 12px auto !important;
+    margin: 0 auto !important;
     padding: 18px !important;
     border-radius: 22px !important;
     overflow-x: hidden !important;
@@ -15,68 +23,63 @@
     -webkit-overflow-scrolling: touch;
   }
 
-  #skybird-auth-modal .auth-close-mobile-safe {
-    top: 10px !important;
-    right: 10px !important;
-  }
-
-  #skybird-auth-modal input,
-  #skybird-auth-modal select,
-  #skybird-auth-modal button {
+  .fixed.inset-0.z-50:has(#btn-close-auth) input,
+  .fixed.inset-0.z-50:has(#btn-close-auth) select,
+  .fixed.inset-0.z-50:has(#btn-close-auth) button {
     max-width: 100%;
   }
 
-  #skybird-auth-modal input,
-  #skybird-auth-modal select {
+  .fixed.inset-0.z-50:has(#btn-close-auth) input,
+  .fixed.inset-0.z-50:has(#btn-close-auth) select {
     min-width: 0;
-    font-size: 16px !important; /* prevents iOS/Android browser zoom on focus */
+    font-size: 16px !important;
   }
 
-  #skybird-auth-modal form {
+  .fixed.inset-0.z-50:has(#btn-close-auth) form {
     min-width: 0;
   }
 
-  #skybird-auth-modal .mobile-auth-tabs {
+  .fixed.inset-0.z-50:has(#btn-close-auth) .flex.items-center.gap-2.p-1 {
     gap: 4px !important;
   }
 
-  #skybird-auth-modal .mobile-auth-tabs button {
+  .fixed.inset-0.z-50:has(#btn-close-auth) .flex.items-center.gap-2.p-1 > button {
     min-width: 0;
     padding-left: 6px !important;
     padding-right: 6px !important;
     white-space: nowrap;
   }
 
-  #skybird-auth-modal .mobile-phone-row {
-    min-width: 0;
-  }
-
-  #skybird-auth-modal .mobile-phone-code {
+  .fixed.inset-0.z-50:has(#btn-close-auth) .flex.gap-2 > select {
     width: 88px !important;
     flex: 0 0 88px !important;
+    padding-left: 4px !important;
+    padding-right: 4px !important;
   }
 
-  #skybird-auth-modal .mobile-phone-input {
+  .fixed.inset-0.z-50:has(#btn-close-auth) .relative.flex-1 {
     min-width: 0;
-    width: 100%;
+  }
+
+  #btn-close-auth {
+    top: 10px !important;
+    right: 10px !important;
   }
 }
 
 @media (max-width: 380px) {
-  #skybird-auth-modal {
+  .fixed.inset-0.z-50:has(#btn-close-auth) {
+    padding: 8px !important;
+  }
+
+  .fixed.inset-0.z-50:has(#btn-close-auth) > div {
     max-width: calc(100vw - 16px) !important;
     padding: 14px !important;
     border-radius: 18px !important;
   }
 
-  #skybird-auth-modal .mobile-phone-code {
+  .fixed.inset-0.z-50:has(#btn-close-auth) .flex.gap-2 > select {
     width: 78px !important;
     flex-basis: 78px !important;
-    padding-left: 4px !important;
-    padding-right: 4px !important;
-  }
-
-  #skybird-auth-modal .mobile-auth-tabs button {
-    font-size: 10px !important;
   }
 }
