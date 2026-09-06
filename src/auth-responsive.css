@@ -1,85 +1,99 @@
-/* SKY-BIRD authentication modal — mobile-first responsive corrections. */
+/* SKY-BIRD authentication — fluid responsive system.
+   No fixed device layout: dimensions scale from the available viewport. */
 
-@media (max-width: 640px) {
-  /* The modal is identified by the existing close-button id, so no auth logic
-     or markup changes are required. */
-  .fixed.inset-0.z-50:has(#btn-close-auth) {
-    padding: 12px !important;
-    align-items: flex-start !important;
-    justify-content: center !important;
-    overflow-x: hidden !important;
-    overflow-y: auto !important;
-  }
-
-  .fixed.inset-0.z-50:has(#btn-close-auth) > div {
-    width: min(100%, 420px) !important;
-    max-width: calc(100vw - 24px) !important;
-    max-height: calc(100dvh - 24px) !important;
-    margin: 0 auto !important;
-    padding: 18px !important;
-    border-radius: 22px !important;
-    overflow-x: hidden !important;
-    overflow-y: auto !important;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .fixed.inset-0.z-50:has(#btn-close-auth) input,
-  .fixed.inset-0.z-50:has(#btn-close-auth) select,
-  .fixed.inset-0.z-50:has(#btn-close-auth) button {
-    max-width: 100%;
-  }
-
-  .fixed.inset-0.z-50:has(#btn-close-auth) input,
-  .fixed.inset-0.z-50:has(#btn-close-auth) select {
-    min-width: 0;
-    font-size: 16px !important;
-  }
-
-  .fixed.inset-0.z-50:has(#btn-close-auth) form {
-    min-width: 0;
-  }
-
-  .fixed.inset-0.z-50:has(#btn-close-auth) .flex.items-center.gap-2.p-1 {
-    gap: 4px !important;
-  }
-
-  .fixed.inset-0.z-50:has(#btn-close-auth) .flex.items-center.gap-2.p-1 > button {
-    min-width: 0;
-    padding-left: 6px !important;
-    padding-right: 6px !important;
-    white-space: nowrap;
-  }
-
-  .fixed.inset-0.z-50:has(#btn-close-auth) .flex.gap-2 > select {
-    width: 88px !important;
-    flex: 0 0 88px !important;
-    padding-left: 4px !important;
-    padding-right: 4px !important;
-  }
-
-  .fixed.inset-0.z-50:has(#btn-close-auth) .relative.flex-1 {
-    min-width: 0;
-  }
-
-  #btn-close-auth {
-    top: 10px !important;
-    right: 10px !important;
-  }
+.fixed.inset-0.z-50:has(#btn-close-auth) {
+  box-sizing: border-box;
+  padding: clamp(8px, 2.5vw, 32px) !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
 }
 
-@media (max-width: 380px) {
-  .fixed.inset-0.z-50:has(#btn-close-auth) {
-    padding: 8px !important;
-  }
+.fixed.inset-0.z-50:has(#btn-close-auth) > div {
+  box-sizing: border-box;
+  width: min(100%, 448px) !important;
+  max-width: calc(100vw - clamp(16px, 5vw, 64px)) !important;
+  max-height: calc(100dvh - clamp(16px, 5vw, 64px)) !important;
+  margin: auto !important;
+  padding: clamp(14px, 3.2vw, 32px) !important;
+  border-radius: clamp(18px, 2.8vw, 30px) !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
 
+/* Keep every descendant inside the modal's available width. */
+.fixed.inset-0.z-50:has(#btn-close-auth) *,
+.fixed.inset-0.z-50:has(#btn-close-auth) *::before,
+.fixed.inset-0.z-50:has(#btn-close-auth) *::after {
+  box-sizing: border-box;
+}
+
+.fixed.inset-0.z-50:has(#btn-close-auth) form,
+.fixed.inset-0.z-50:has(#btn-close-auth) label,
+.fixed.inset-0.z-50:has(#btn-close-auth) .relative {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.fixed.inset-0.z-50:has(#btn-close-auth) input,
+.fixed.inset-0.z-50:has(#btn-close-auth) select,
+.fixed.inset-0.z-50:has(#btn-close-auth) button {
+  max-width: 100%;
+}
+
+/* Fluid text and controls across phones, tablets and desktops. */
+.fixed.inset-0.z-50:has(#btn-close-auth) input,
+.fixed.inset-0.z-50:has(#btn-close-auth) select {
+  min-width: 0;
+  font-size: clamp(16px, 1vw + 12px, 16px) !important;
+}
+
+.fixed.inset-0.z-50:has(#btn-close-auth) h2 {
+  font-size: clamp(1.15rem, 1.4vw + .8rem, 1.45rem) !important;
+}
+
+.fixed.inset-0.z-50:has(#btn-close-auth) form {
+  gap: clamp(10px, 1.5vw, 16px);
+}
+
+/* Login/register switch: shrink gracefully without text being clipped. */
+.fixed.inset-0.z-50:has(#btn-close-auth) .flex.items-center.gap-2.p-1 {
+  gap: clamp(3px, 0.8vw, 8px) !important;
+}
+
+.fixed.inset-0.z-50:has(#btn-close-auth) .flex.items-center.gap-2.p-1 > button {
+  min-width: 0;
+  padding-left: clamp(4px, 1vw, 10px) !important;
+  padding-right: clamp(4px, 1vw, 10px) !important;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Phone field: proportional country-code area + fluid number field. */
+.fixed.inset-0.z-50:has(#btn-close-auth) .flex.gap-2 > select {
+  width: clamp(76px, 24vw, 112px) !important;
+  flex: 0 1 clamp(76px, 24vw, 112px) !important;
+  padding-left: clamp(3px, 1vw, 8px) !important;
+  padding-right: clamp(3px, 1vw, 8px) !important;
+}
+
+.fixed.inset-0.z-50:has(#btn-close-auth) .relative.flex-1 {
+  min-width: 0;
+  width: 100%;
+}
+
+#btn-close-auth {
+  top: clamp(8px, 1.5vw, 20px) !important;
+  right: clamp(8px, 1.5vw, 20px) !important;
+}
+
+/* Short landscape phones: prioritize usable vertical space. */
+@media (max-height: 560px) {
   .fixed.inset-0.z-50:has(#btn-close-auth) > div {
-    max-width: calc(100vw - 16px) !important;
-    padding: 14px !important;
-    border-radius: 18px !important;
-  }
-
-  .fixed.inset-0.z-50:has(#btn-close-auth) .flex.gap-2 > select {
-    width: 78px !important;
-    flex-basis: 78px !important;
+    max-height: calc(100dvh - 12px) !important;
+    padding-top: 14px !important;
+    padding-bottom: 14px !important;
   }
 }
