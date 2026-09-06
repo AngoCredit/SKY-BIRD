@@ -24,6 +24,7 @@ import type { Bet, GameRound } from '../types';
 let authoritativeRound: AuthoritativeRound | null = null;
 let unsubscribe: (() => void) | null = null;
 let latestBets: any[] = [];
+let lobbyRefreshTimer: ReturnType<typeof setInterval> | undefined;
 
 function requireBackend() {
   if (!isSupabaseConfigured) throw new Error('SUPABASE_NOT_CONFIGURED');
@@ -71,6 +72,16 @@ function startAuthority() {
     void refreshBets(round);
     store.notify();
   }, 500);
+
+  // Re-render the presentation lobby every 500ms so BOT exits follow the same
+  // server-authoritative multiplier animation. This does not write to Supabase.
+  lobbyRefreshTimer = setInterval(() => {
+    store.notify();
+  }, 500);
+
+  window.addEventListener('beforeunload', () => {
+    if (lobbyRefreshTimer) clearInterval(lobbyRefreshTimer);
+  }, { once: true });
 }
 
 const originalGetActiveBets = store.getActiveBets.bind(store);
