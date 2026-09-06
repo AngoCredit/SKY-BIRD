@@ -6,6 +6,7 @@ import './index.css';
 import './services/productionAuthorityPatch';
 import './services/productionSecurityPatch';
 import './services/productionHistoryPatch';
+import './services/productionAuthNavigationPatch';
 
 const normalizedHash = window.location.hash.toLowerCase();
 const recoveryRoute =
