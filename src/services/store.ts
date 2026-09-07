@@ -31,7 +31,8 @@ import {
   subscribeToSupportMessages,
   subscribeToTransactions,
   subscribeToProfiles,
-  sendSupportMessageSupabase
+  sendSupportMessageSupabase,
+  fetchUserBetsHistory
 } from './supabase_rpc';
 
 const STORAGE_KEYS = {
@@ -722,6 +723,30 @@ class SkybirdStore {
           this.listeners.forEach((l) => l());
         }
       });
+
+      // Carregar histórico de apostas reais do Supabase para a aba "Minhas"
+      fetchUserBetsHistory(user.id).then((betsData) => {
+        if (betsData && betsData.length > 0) {
+          const mappedBets: Bet[] = betsData.map((b: any) => ({
+            id: b.id,
+            roundId: b.round_id,
+            userId: b.user_id,
+            userName: user.name,
+            userAvatar: user.avatar,
+            amount: Number(b.amount),
+            autoCashOutMultiplier: b.auto_cashout ? Number(b.auto_cashout) : null,
+            cashOutMultiplier: b.cashout_multiplier ? Number(b.cashout_multiplier) : null,
+            payout: b.payout ? Number(b.payout) : null,
+            status: b.status as any,
+            createdAt: b.created_at,
+            isCurrentUser: true,
+            panelId: b.panel_id || 1
+          }));
+          this.userBetHistory = mappedBets;
+          this.saveToStorage();
+          this.notify();
+        }
+      });
     }
 
     // Process referral code if provided upon registration
@@ -920,6 +945,18 @@ class SkybirdStore {
       status
     );
     this.notify();
+  }
+
+  public setWalletBalance(userId: string, availableBalance: number, lockedBalance = 0): void {
+    if (!userId) return;
+    this.wallets[userId] = {
+      userId,
+      availableBalance,
+      lockedBalance,
+      totalBalance: availableBalance + lockedBalance,
+      currency: 'USD'
+    };
+    this.saveToStorage();
   }
 
   // --- WALLET & LEDGER ---
@@ -2002,6 +2039,10 @@ class SkybirdStore {
       // Adicionar à lista de apostas ativas (o resetador de rodada preserva apostas com roundId correto)
       this.activeBets.push(bet);
 
+      // Guardar imediatamente no histórico do utilizador (para aparecer na aba "Minhas")
+      this.userBetHistory.unshift({ ...bet });
+      if (this.userBetHistory.length > 50) this.userBetHistory.pop();
+
       // Actualizar o totalBetsAmount na rodada correcta (pode ter mudado pós-await)
       if (this.currentRound && this.currentRound.roundNumber === capturedRoundNumber) {
         this.currentRound.totalBetsAmount += amount;
@@ -2211,8 +2252,13 @@ class SkybirdStore {
       myBet.payout = serverResult.payout;
       myBet.status = 'cashed_out';
 
-      this.userBetHistory.unshift({ ...myBet });
-      if (this.userBetHistory.length > 50) this.userBetHistory.pop();
+      const hIdx = this.userBetHistory.findIndex((h) => h.id === myBet!.id);
+      if (hIdx >= 0) {
+        this.userBetHistory[hIdx] = { ...myBet };
+      } else {
+        this.userBetHistory.unshift({ ...myBet });
+        if (this.userBetHistory.length > 50) this.userBetHistory.pop();
+      }
 
       this.notify();
       return { payout: serverResult.payout, multiplier: serverResult.multiplier, betId: myBet.id };
@@ -2305,8 +2351,13 @@ class SkybirdStore {
       if (b.status === 'active') {
         b.status = 'crashed';
         if (b.isCurrentUser) {
-          this.userBetHistory.unshift({ ...b });
-          if (this.userBetHistory.length > 50) this.userBetHistory.pop();
+          const hIdx = this.userBetHistory.findIndex((h) => h.id === b.id);
+          if (hIdx >= 0) {
+            this.userBetHistory[hIdx] = { ...b };
+          } else {
+            this.userBetHistory.unshift({ ...b });
+            if (this.userBetHistory.length > 50) this.userBetHistory.pop();
+          }
         }
       }
     });
@@ -2324,13 +2375,19 @@ class SkybirdStore {
   }
 
   public getTopWinners(): Array<{ id: string; userName: string; userAvatar: string; amount: number; multiplier: number; payout: number; date: string }> {
-    return [
-      { id: 'top_1', userName: 'Mateus K.', userAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80', amount: 50.00, multiplier: 84.50, payout: 4225.00, date: 'Hoje às 14:32' },
-      { id: 'top_2', userName: 'Nelson D.', userAvatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150&auto=format&fit=crop&q=80', amount: 100.00, multiplier: 38.20, payout: 3820.00, date: 'Hoje às 13:10' },
-      { id: 'top_3', userName: 'Katia S.', userAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80', amount: 25.00, multiplier: 120.00, payout: 3000.00, date: 'Hoje às 11:45' },
-      { id: 'top_4', userName: 'Antonio L.', userAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80', amount: 40.00, multiplier: 65.40, payout: 2616.00, date: 'Ontem às 22:15' },
-      { id: 'top_5', userName: 'Domingos F.', userAvatar: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=150&auto=format&fit=crop&q=80', amount: 80.00, multiplier: 24.10, payout: 1928.00, date: 'Ontem às 19:40' }
-    ];
+    return this.userBetHistory
+      .filter((b) => b.status === 'cashed_out' && b.cashOutMultiplier && b.payout)
+      .sort((a, b) => (b.payout || 0) - (a.payout || 0))
+      .slice(0, 10)
+      .map((b) => ({
+        id: b.id,
+        userName: b.userName || 'Jogador',
+        userAvatar: b.userAvatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${b.userId}`,
+        amount: b.amount,
+        multiplier: b.cashOutMultiplier || 1,
+        payout: b.payout || 0,
+        date: new Date(b.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      }));
   }
 
   public getDisplayCurrency(): 'USD' {

@@ -139,8 +139,39 @@ export const ANIMAL_AVATARS: AnimalAvatarOption[] = [
     id: 'cybercat',
     name: 'Gato Neon',
     category: 'mascotes',
-    url: 'https://images.unsplash.com/photo-1514888286974-6c03e2ca1dba?w=200&auto=format&fit=crop&q=80',
+    url: 'https://api.dicebear.com/7.x/bottts/svg?seed=CyberCatSky',
     emoji: '🐱'
+  },
+  {
+    id: 'phoenix_avatar',
+    name: 'Fénix Suprema',
+    category: 'aves',
+    url: 'https://images.unsplash.com/photo-1516339901601-2e1b62dc0c45?w=200&auto=format&fit=crop&q=80',
+    emoji: '🔥',
+    badge: 'Lendário'
+  },
+  {
+    id: 'cheetah',
+    name: 'Chita Turbo',
+    category: 'selva',
+    url: 'https://images.unsplash.com/photo-1534188753412-3e26d0d618d6?w=200&auto=format&fit=crop&q=80',
+    emoji: '🐆',
+    badge: 'Velocidade'
+  },
+  {
+    id: 'astro_dog',
+    name: 'Cão Astronauta',
+    category: 'mascotes',
+    url: 'https://api.dicebear.com/7.x/bottts/svg?seed=AstroDogPilot',
+    emoji: '🐶'
+  },
+  {
+    id: 'space_fox',
+    name: 'Raposa Cósmica',
+    category: 'mascotes',
+    url: 'https://api.dicebear.com/7.x/bottts/svg?seed=SpaceFoxPilot',
+    emoji: '🦊',
+    badge: 'Novo'
   },
   {
     id: 'speedrabbit',
@@ -186,10 +217,9 @@ export const AvatarSelectorModal: React.FC<AvatarSelectorModalProps> = ({
 
   const handleConfirmSelection = () => {
     audioManager.playButtonClick();
+    store.updateUserAvatar(selectedUrl);
     if (onSelectAvatar) {
       onSelectAvatar(selectedUrl);
-    } else {
-      store.updateUserAvatar(selectedUrl);
     }
     audioManager.playNotification();
     setSavedSuccess(true);

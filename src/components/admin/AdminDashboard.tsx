@@ -34,6 +34,7 @@ import {
   Upload
 } from 'lucide-react';
 import { store } from '../../services/store';
+import { AdminFinancialPanel } from './AdminFinancialPanel';
 import { supabase, isSupabaseConfigured } from '../../services/supabase';
 import { audioManager } from '../../services/audioManager';
 import {
@@ -58,10 +59,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onLogoutAdmin
 }) => {
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'users' | 'rounds' | 'transactions' | 'support' | 'audio' | 'settings' | 'audit' | 'kyc'
+    'overview' | 'users' | 'financial' | 'rounds' | 'transactions' | 'support' | 'audio' | 'settings' | 'audit' | 'kyc'
   >(() => {
     const savedTab = localStorage.getItem('skybird_admin_active_tab');
-    if (savedTab && ['overview', 'users', 'rounds', 'transactions', 'support', 'audio', 'settings', 'audit', 'kyc'].includes(savedTab)) {
+    if (savedTab && ['overview', 'users', 'financial', 'rounds', 'transactions', 'support', 'audio', 'settings', 'audit', 'kyc'].includes(savedTab)) {
       return savedTab as any;
     }
     return 'overview';
@@ -81,6 +82,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [kycRejectReason, setKycRejectReason] = useState('');
   const [kycPreviewImage, setKycPreviewImage] = useState<string | null>(null);
   const [adminToast, setAdminToast] = useState<{ title: string; message: string } | null>(null);
+  const [loadingStats, setLoadingStats] = useState(true);
+  const [dashboardStats, setDashboardStats] = useState({
+    players: 0,
+    deposits: 0,
+    withdrawals: 0,
+    revenue: 0,
+    commissions: 0
+  });
 
   // Support Reply State
   const [selectedConvId, setSelectedConvId] = useState<string>(conversations[0]?.id || '');
@@ -151,7 +160,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Realtime Supabase listener for Admin — direct channel subscriptions
   useEffect(() => {
-    if (!isSupabaseConfigured) return;
+    loadDashboardStats();
 
     // Notify admin on new transactions (deposits / withdrawals) from any player
     const txChannel = supabase
@@ -163,6 +172,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           showAdminToast(label + ' Solicitado!', `$${Number(tx.amount).toFixed(2)} USD — Ref: ${tx.reference}`);
           store.syncTransactionFromSupabase(tx);
           setTransactions(store.getAllTransactions());
+          loadDashboardStats();
         }
       })
       // Also listen for UPDATE events (approve/reject from another admin session)
@@ -170,6 +180,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const tx = payload.new as any;
         store.syncTransactionFromSupabase(tx);
         setTransactions(store.getAllTransactions());
+        loadDashboardStats();
       })
       .subscribe();
 
@@ -220,11 +231,87 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
   }, []);
 
+  const loadDashboardStats = async () => {
+    setLoadingStats(true);
+
+    const { data, error } = await supabase
+      .rpc('admin_get_dashboard');
+
+    if (error) {
+      console.error(error);
+      setLoadingStats(false);
+      return;
+    }
+
+    setDashboardStats({
+      players: Number(data.players ?? 0),
+      deposits: Number(data.total_deposits ?? 0),
+      withdrawals: Number(data.total_withdrawals ?? 0),
+      commissions: Number(data.referral_commissions ?? 0),
+      revenue: Number(data.ggr ?? 0)
+    });
+
+    setLoadingStats(false);
+  };
+
+  const loadUsers = async () => {
+    const { data, error } = await supabase
+      .rpc('admin_get_users');
+
+    if (error) {
+      console.error(
+        'Erro ao carregar utilizadores:',
+        error
+      );
+      return;
+    }
+
+    if (data && Array.isArray(data)) {
+      const formattedUsers: User[] = data.map((u: any) => {
+        const userId = u.id || u.user_id;
+        const availableBal = Number(u.available_balance ?? u.balance ?? u.availableBalance ?? 0);
+        const lockedBal = Number(u.locked_balance ?? u.lockedBalance ?? 0);
+
+        // Synchronize wallet balances with store
+        if (userId) {
+          store.syncKycFromSupabase({
+            userId,
+            status: u.is_verified || u.isVerified ? 'approved' : 'pending'
+          });
+          store.setWalletBalance(userId, availableBal, lockedBal);
+        }
+
+        return {
+          id: userId,
+          name: u.name || u.full_name || 'Jogador',
+          email: u.email || '',
+          phone: u.phone || u.whatsapp_number,
+          avatar: u.avatar_url || u.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${userId}`,
+          role: u.role || 'player',
+          status: u.status || 'active',
+          isVerified: Boolean(u.is_verified ?? u.isVerified ?? false),
+          verificationStatus: (u.is_verified || u.isVerified) ? 'verified' : 'unverified',
+          referralCode: u.referral_code || u.referralCode,
+          referralCount: Number(u.referral_count ?? u.referralCount ?? 0),
+          referralEarnings: Number(u.referral_earnings ?? u.referralEarnings ?? 0),
+          deviceFingerprint: u.device_fingerprint || u.deviceFingerprint || 'fp_browser',
+          createdAt: u.created_at || u.createdAt || new Date().toISOString(),
+          lastLoginAt: u.last_login_at || u.lastLoginAt,
+          balance: availableBal
+        };
+      });
+
+      store.syncAllUsers(formattedUsers);
+      setUsers(formattedUsers);
+    }
+  };
+
   useEffect(() => {
+    loadUsers();
+    loadDashboardStats();
     let txPollInterval: ReturnType<typeof setInterval> | null = null;
 
     const unsub = store.subscribe(() => {
-      setUsers(store.getAllUsers());
       setRounds(store.getPastRounds());
       setTransactions(store.getAllTransactions());
       setConversations(store.getAllConversations());
@@ -235,35 +322,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     // Se o Supabase estiver configurado, carregar todos os dados diretamente do banco de dados
     if (isSupabaseConfigured) {
-      // 1. Perfis de Utilizadores
-      supabase
-        .from('profiles')
-        .select('*')
-        .then(({ data, error }) => {
-          if (error) {
-            console.warn('[AdminDashboard] Erro ao procurar perfis no Supabase:', error);
-          } else if (data) {
-            const fetchedUsers: User[] = data.map((profileData: any) => ({
-              id: profileData.id,
-              name: profileData.name || 'Jogador',
-              email: profileData.email || '',
-              phone: profileData.phone,
-              avatar: profileData.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profileData.id}`,
-              role: profileData.role || 'player',
-              status: profileData.status || 'active',
-              isVerified: profileData.is_verified || false,
-              verificationStatus: profileData.is_verified ? 'verified' : 'unverified',
-              referralCode: profileData.referral_code,
-              referralCount: profileData.referral_count || 0,
-              referralEarnings: Number(profileData.referral_earnings || 0),
-              deviceFingerprint: profileData.device_fingerprint,
-              createdAt: profileData.created_at,
-              lastLoginAt: profileData.last_login_at
-            }));
-            store.syncAllUsers(fetchedUsers);
-          }
-          setUsers(store.getAllUsers());
-        });
+      loadUsers();
 
       // 2. Transações Financeiras (Depósitos e Saques)
       const fetchTransactions = () => {
@@ -280,6 +339,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               });
             }
             setTransactions(store.getAllTransactions());
+            loadDashboardStats();
           });
       };
       fetchTransactions();
@@ -322,13 +382,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           if (error) {
             console.warn('[AdminDashboard] Erro ao buscar KYC do Supabase:', error);
           } else if (data && data.length > 0) {
+            const allUsers = store.getAllUsers();
             data.forEach((kyc: any) => {
+              const matchedUser = allUsers.find(u => u.id === kyc.user_id);
               const req = {
                 id: kyc.id,
                 userId: kyc.user_id,
-                userName: kyc.user_name,
-                userEmail: kyc.user_email,
-                userAvatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${kyc.user_id}`,
+                userName: kyc.user_name || matchedUser?.name || 'Jogador',
+                userEmail: kyc.user_email || matchedUser?.email || '',
+                userAvatar: matchedUser?.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${kyc.user_id}`,
                 idDocumentImage: kyc.id_document_url || '',
                 selfieImage: kyc.selfie_url || '',
                 airtmAccount: kyc.airtm_account || '',
@@ -415,6 +477,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {[
           { id: 'overview', label: 'Dashboard Geral', icon: TrendingUp },
           { id: 'users', label: 'Gestão de Usuários', icon: Users },
+          { id: 'financial', label: 'Financeiro', icon: DollarSign },
           { id: 'kyc', label: 'Verificações KYC', icon: ShieldCheck, badge: verificationRequests.filter(r => r.status === 'pending').length },
           { id: 'rounds', label: 'Histórico & Fairness', icon: Gamepad2 },
           { id: 'transactions', label: 'Ledger & Saques', icon: Wallet, badge: transactions.filter(t => t.status === 'pending' || t.status === 'processing').length },
@@ -483,24 +546,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* Metrics cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
               <div className="p-4 rounded-2xl glass-panel border border-white/10">
                 <span className="text-xs text-slate-400 block mb-1">Total de Jogadores</span>
                 <span className="text-2xl font-cyber font-bold text-white">
-                  {users.filter((u) => u.role !== 'admin').length}
+                  {loadingStats ? <span className="animate-pulse text-slate-500">...</span> : dashboardStats.players}
                 </span>
               </div>
               <div className="p-4 rounded-2xl glass-panel border border-white/10">
                 <span className="text-xs text-slate-400 block mb-1">Total Depositado</span>
-                <span className="text-2xl font-cyber font-bold text-emerald-400">${totalDeposits.toFixed(2)}</span>
+                <span className="text-2xl font-cyber font-bold text-emerald-400">
+                  {loadingStats ? <span className="animate-pulse text-emerald-600/50">...</span> : `$${dashboardStats.deposits.toFixed(2)}`}
+                </span>
               </div>
               <div className="p-4 rounded-2xl glass-panel border border-white/10">
                 <span className="text-xs text-slate-400 block mb-1">Total Sacado</span>
-                <span className="text-2xl font-cyber font-bold text-amber-400">${totalWithdrawals.toFixed(2)}</span>
+                <span className="text-2xl font-cyber font-bold text-amber-400">
+                  {loadingStats ? <span className="animate-pulse text-amber-600/50">...</span> : `$${dashboardStats.withdrawals.toFixed(2)}`}
+                </span>
               </div>
               <div className="p-4 rounded-2xl glass-panel border border-cyan-500/30">
                 <span className="text-xs text-slate-400 block mb-1">Gross Gaming Revenue</span>
-                <span className="text-2xl font-cyber font-bold text-cyan-300">${grossRevenue.toFixed(2)}</span>
+                <span className="text-2xl font-cyber font-bold text-cyan-300">
+                  {loadingStats ? <span className="animate-pulse text-cyan-600/50">...</span> : `$${dashboardStats.revenue.toFixed(2)}`}
+                </span>
+              </div>
+              <div className="p-4 rounded-2xl glass-panel border border-white/10">
+                <span className="text-xs text-slate-400 block mb-1">Comissões Referência</span>
+                <span className="text-2xl font-cyber font-bold text-cyan-400">
+                  {loadingStats ? <span className="animate-pulse text-cyan-600/50">...</span> : `$${dashboardStats.commissions.toFixed(2)}`}
+                </span>
               </div>
             </div>
 
@@ -585,7 +660,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     users
                       .filter((u) => u.role !== 'admin')
                       .map((u) => {
-                        const wallet = store.getWallet(u.id);
                         const fpShort = u.deviceFingerprint ? u.deviceFingerprint.slice(0, 12) + '...' : 'fp_browser';
                         const multiAccCount = users.filter((x) => x.deviceFingerprint && x.deviceFingerprint === u.deviceFingerprint).length;
 
@@ -613,7 +687,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               )}
                             </td>
                             <td className="py-3 font-mono text-emerald-400 font-bold">
-                              ${(wallet.availableBalance ?? 0).toFixed(2)} USD
+                              ${(u.balance ?? 0).toFixed(2)} USD
                             </td>
                             <td className="py-3">
                               <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-mono ${
@@ -668,6 +742,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </table>
             </div>
           </div>
+        )}
+
+        {/* FINANCIAL TAB */}
+        {activeTab === 'financial' && (
+          <AdminFinancialPanel />
         )}
 
         {/* KYC VERIFICATION TAB */}

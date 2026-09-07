@@ -1,0 +1,13 @@
+﻿src/components/admin/AdminLoginPage.tsx(73,41): error TS2345: Argument of type '{ success: boolean; message?: string; }' is not assignable to parameter of type 'Promise<unknown>'.
+  Type '{ success: boolean; message?: string; }' is missing the following properties from type 'Promise<unknown>': then, catch, finally, [Symbol.toStringTag]
+src/components/admin/AdminLoginPage.tsx(75,31): error TS2339: Property 'role' does not exist on type 'unknown'.
+src/components/admin/AdminLoginPage.tsx(75,59): error TS2339: Property 'status' does not exist on type 'unknown'.
+src/components/game/BettingPanel.tsx(212,32): error TS2304: Cannot find name 'setInputAmount'.
+src/services/productionAuthorityPatch.ts(54,11): error TS2341: Property 'notify' is private and only accessible within class 'SkybirdStore'.
+src/services/productionAuthorityPatch.ts(64,11): error TS2341: Property 'notify' is private and only accessible within class 'SkybirdStore'.
+src/services/productionAuthorityPatch.ts(73,11): error TS2341: Property 'notify' is private and only accessible within class 'SkybirdStore'.
+src/services/productionAuthorityPatch.ts(79,11): error TS2341: Property 'notify' is private and only accessible within class 'SkybirdStore'.
+src/services/productionSecurityPatch.ts(62,7): error TS2339: Property 'submitKYC' does not exist on type 'SkybirdStore'.
+src/services/productionSecurityPatch.ts(64,7): error TS2339: Property 'approveKYC' does not exist on type 'SkybirdStore'.
+src/services/productionSecurityPatch.ts(65,7): error TS2339: Property 'rejectKYC' does not exist on type 'SkybirdStore'.
+src/services/roundHistory.ts(1,26): error TS2307: Cannot find module './supabaseClient' or its corresponding type declarations.

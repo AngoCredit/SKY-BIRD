@@ -1,13 +1,17 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AltitudeStage, GameRoundStatus } from '../../types';
-import { ShieldCheck, Sparkles, PlaneTakeoff } from 'lucide-react';
+import { ShieldCheck, PlaneTakeoff } from 'lucide-react';
+
+// How long the countdown phase lasts (must match server)
+const COUNTDOWN_DURATION_MS = 5000;
 
 interface MultiplierDisplayProps {
   status: GameRoundStatus;
   multiplier: number;
   crashPoint: number;
   altitudeStage: AltitudeStage;
-  countdown: number;
+  /** Timestamp (ms) when the round transitions to RUNNING. Used to drive the loading bar locally. */
+  roundStartsAt: number | null;
   cashedOutMultiplier: number | null;
   cashedOutPayout: number | null;
   onOpenFairness: () => void;
@@ -17,11 +21,41 @@ export const MultiplierDisplay: React.FC<MultiplierDisplayProps> = ({
   status,
   multiplier,
   crashPoint,
-  countdown,
+  roundStartsAt,
   cashedOutMultiplier,
   cashedOutPayout,
-  onOpenFairness
+  onOpenFairness,
 }) => {
+  // Local high-frequency progress state (0-100)
+  const [fillPct, setFillPct] = useState(0);
+  const [secLeft, setSecLeft] = useState(5);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const isWaitingOrCountdown = status === 'WAITING' || status === 'COUNTDOWN';
+
+    if (!isWaitingOrCountdown) {
+      setFillPct(0);
+      setSecLeft(5);
+      return;
+    }
+
+    const start = Date.now();
+    const WAITING_DURATION = 5000;
+
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - start;
+      const progress = Math.min(100, (elapsed / WAITING_DURATION) * 100);
+      const remainingMs = Math.max(0, WAITING_DURATION - elapsed);
+      const sec = Math.max(1, Math.ceil(remainingMs / 1000));
+
+      setFillPct(progress);
+      setSecLeft(sec);
+    }, 100);
+
+    return () => clearInterval(interval);
+  }, [status, roundStartsAt]);
+
   return (
     <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-between p-3 sm:p-4 z-10 select-none">
       {/* Top Bar inside Canvas */}
@@ -46,7 +80,7 @@ export const MultiplierDisplay: React.FC<MultiplierDisplayProps> = ({
           ) : status === 'COUNTDOWN' ? (
             <div className="flex items-center gap-1.5 text-amber-400 font-semibold">
               <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
-              <span>DECOLAGEM EM {countdown}s</span>
+              <span>DECOLAGEM EM {secLeft}s</span>
             </div>
           ) : status === 'CRASHED' ? (
             <div className="flex items-center gap-1.5 text-rose-400 font-semibold">
@@ -62,39 +96,34 @@ export const MultiplierDisplay: React.FC<MultiplierDisplayProps> = ({
         </div>
       </div>
 
-      {/* Center Aviator Multiplier Display */}
+      {/* Center Display */}
       <div className="flex flex-col items-center justify-center my-auto text-center">
-        {status === 'COUNTDOWN' && (
-          <div className="flex flex-col items-center animate-fade-in">
-            <div className="flex items-center gap-2 mb-2">
-              <PlaneTakeoff className="w-5 h-5 text-red-500 animate-bounce" />
-              <span className="text-xs font-semibold tracking-wider text-slate-300 uppercase">
-                ESPERANDO A PRÓXIMA RODADA
+
+        {/* WAITING or COUNTDOWN — local timer progress bar */}
+        {(status === 'WAITING' || status === 'COUNTDOWN') && (
+          <div className="flex flex-col items-center justify-center space-y-3">
+            <div className="flex items-center gap-2 text-slate-200">
+              <PlaneTakeoff className="w-5 h-5 text-red-500 animate-pulse" />
+              <span className="text-xs font-bold tracking-widest uppercase">
+                AGUARDE A PRÓXIMA RODADA
               </span>
             </div>
-            <div className="w-48 sm:w-60 h-2 bg-[#171d2a] rounded-full overflow-hidden border border-[#263348] p-0.5">
+            {/* Real fill bar */}
+            <div className="w-64 sm:w-80 h-3 bg-[#0e131d] rounded-full overflow-hidden border border-[#233045] p-0.5 shadow-2xl">
               <div
-                className="h-full bg-gradient-to-r from-red-600 via-rose-500 to-amber-400 rounded-full transition-all duration-300"
-                style={{ width: `${Math.min(100, Math.max(0, ((5 - countdown) / 5) * 100))}%` }}
+                className="h-full bg-gradient-to-r from-red-700 via-red-500 to-rose-400 rounded-full shadow-[0_0_12px_rgba(239,68,68,0.8)] transition-all"
+                style={{ width: `${fillPct}%` }}
               />
             </div>
-          </div>
-        )}
-
-        {status === 'WAITING' && (
-          <div className="flex flex-col items-center animate-fade-in text-slate-400 text-xs">
-            <span className="uppercase tracking-widest font-semibold text-slate-400 mb-1">
-              CONECTANDO AO RADAR
-            </span>
-            <span className="text-sm font-mono text-cyan-400 animate-pulse">
-              Aguardando início...
+            <span className="text-xs font-mono text-slate-400 font-semibold">
+              Decolagem em {secLeft}s...
             </span>
           </div>
         )}
 
+        {/* RUNNING — live multiplier */}
         {status === 'RUNNING' && (
           <div className="flex flex-col items-center">
-            {/* Aviator Giant Multiplier Font */}
             <div className="text-6xl sm:text-7xl lg:text-8xl font-sans font-black tracking-tight text-white drop-shadow-[0_4px_16px_rgba(0,0,0,0.8)]">
               {multiplier.toFixed(2)}
               <span className="text-4xl sm:text-5xl lg:text-6xl text-red-500 ml-1">x</span>
@@ -102,9 +131,10 @@ export const MultiplierDisplay: React.FC<MultiplierDisplayProps> = ({
           </div>
         )}
 
+        {/* CRASHED */}
         {status === 'CRASHED' && (
-          <div className="flex flex-col items-center animate-scale-in">
-            <span className="text-sm sm:text-base font-black tracking-widest text-red-500 uppercase drop-shadow-[0_0_10px_rgba(239,68,68,0.7)] mb-1">
+          <div className="flex flex-col items-center animate-scale-in space-y-1">
+            <span className="text-sm sm:text-base font-black tracking-widest text-red-500 uppercase drop-shadow-[0_0_10px_rgba(239,68,68,0.7)]">
               VOOU PARA LONGE!
             </span>
             <div className="text-5xl sm:text-6xl lg:text-7xl font-sans font-black text-red-500 drop-shadow-[0_0_20px_rgba(239,68,68,0.5)]">
@@ -115,7 +145,7 @@ export const MultiplierDisplay: React.FC<MultiplierDisplayProps> = ({
         )}
       </div>
 
-      {/* Bottom Subtle Overlay */}
+      {/* Bottom Bar */}
       <div className="w-full flex items-center justify-between text-[10px] text-slate-500 font-mono">
         <span>SKYBIRD ENGINE v2.6</span>
         <span>RTP: 97.0%</span>

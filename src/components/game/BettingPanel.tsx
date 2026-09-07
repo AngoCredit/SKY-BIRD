@@ -209,7 +209,8 @@ export const BettingPanel: React.FC<BettingPanelProps> = ({
               <button
                 key={preset}
                 type="button"
-                onClick={() => setInputAmount(preset)}
+                onClick={() => handleQuickSelect(preset)}
+                disabled={isInputDisabled}
                 className={`py-0.5 rounded text-[9px] sm:text-[10px] font-mono font-bold transition border cursor-pointer ${
                   inputAmount === preset
                     ? 'bg-cyan-950/80 border-cyan-500/80 text-cyan-300'

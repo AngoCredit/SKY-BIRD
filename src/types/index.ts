@@ -21,6 +21,7 @@ export interface User {
   isMultiAccountFlagged?: boolean;
   createdAt: string;
   lastLoginAt: string;
+  balance?: number;
 }
 
 export type TransactionType = 'deposit' | 'withdrawal' | 'bet' | 'cashout' | 'refund' | 'referral_bonus';
@@ -58,6 +59,8 @@ export interface GameRound {
   status: GameRoundStatus;
   startedAt: number | null;
   endedAt: number | null;
+  /** Epoch ms when this round is scheduled to start (set during WAITING phase) */
+  scheduledStartAt?: number | null;
   crashPoint: number;
   serverSeed: string;
   serverSeedHash: string;

@@ -190,8 +190,11 @@ export function App() {
           const u = await syncUserProfile(session.user);
           if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
             setIsAuthOpen(false);
-            if (currentView === 'admin-login' && u.role === 'admin') {
+            if (u.role === 'admin') {
               setCurrentView('admin');
+              localStorage.setItem('skybird_current_view', 'admin');
+            } else {
+              setCurrentView('game');
             }
           }
         } else if (event === 'SIGNED_OUT') {
@@ -610,6 +613,7 @@ export function App() {
         isOpen={isAvatarOpen}
         onClose={() => setIsAvatarOpen(false)}
         currentAvatarUrl={currentUser.avatar}
+        onSelectAvatar={(avatarUrl) => store.updateUserAvatar(avatarUrl)}
       />
 
       {/* Automated Airtm Notification & System Visual/Sound Notifications */}

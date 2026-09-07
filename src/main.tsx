@@ -1,10 +1,23 @@
-import {StrictMode} from 'react';
-import {createRoot} from 'react-dom/client';
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
+import { PasswordRecoveryPage } from './components/auth/PasswordRecoveryPage';
 import './index.css';
+import './auth-responsive.css';
+import './services/productionAuthorityPatch';
+import './services/productionSecurityPatch';
+import './services/productionHistoryPatch';
+import './services/productionAuthNavigationPatch';
+
+const normalizedHash = window.location.hash.toLowerCase();
+const recoveryRoute =
+  normalizedHash.includes('recover-password') ||
+  normalizedHash.includes('type=recovery') ||
+  normalizedHash.includes('access_token=') ||
+  new URLSearchParams(window.location.search).has('code');
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    {recoveryRoute ? <PasswordRecoveryPage /> : <App />}
   </StrictMode>,
 );

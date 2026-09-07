@@ -23,6 +23,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { audioManager } from '../../services/audioManager';
+import { supabase, isSupabaseConfigured } from '../../services/supabase';
 import { useTranslation } from '../../services/i18n';
 
 import { DeleteAccountModal } from './DeleteAccountModal';
@@ -67,6 +68,29 @@ export const WalletView: React.FC<WalletViewProps> = ({
     store.getUserVerificationRequest(userId)
   );
 
+  // ================================
+// REFERAL SYSTEM - SUPABASE REAL
+// ================================
+
+const [referralCode, setReferralCode] =
+    useState<string>('');
+
+const [referralLink, setReferralLink] =
+    useState<string>('');
+
+const [referralStats, setReferralStats] =
+    useState({
+
+        guests: 0,
+
+        pending: 0,
+
+        approved: 0,
+
+        total: 0
+
+    });
+
   // Listen for changes
   React.useEffect(() => {
     const unsub = store.subscribe(() => {
@@ -90,6 +114,55 @@ export const WalletView: React.FC<WalletViewProps> = ({
     });
     return () => unsub();
   }, [userId]);
+
+  // ================================
+// LOAD REFERRAL DATA
+// ================================
+// LOAD REFERRAL DATA
+// ================================
+
+React.useEffect(() => {
+  async function loadReferral() {
+    try {
+      const code = currentUser?.referralCode || store.getCurrentUser()?.referralCode || '';
+      const activeUserId = currentUser?.id || store.getCurrentUser()?.id;
+
+      let finalCode = code;
+      let count = currentUser?.referralCount || 0;
+      let earnings = currentUser?.referralEarnings || 0;
+
+      if (!finalCode && activeUserId && isSupabaseConfigured) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('referral_code, referral_count, referral_earnings')
+          .eq('id', activeUserId)
+          .maybeSingle();
+
+        if (profile) {
+          finalCode = profile.referral_code || '';
+          count = Number(profile.referral_count || 0);
+          earnings = Number(profile.referral_earnings || 0);
+        }
+      }
+
+      if (finalCode) {
+        setReferralCode(finalCode);
+        setReferralLink(`${window.location.origin}/#register?ref=${encodeURIComponent(finalCode)}`);
+      }
+
+      setReferralStats({
+        guests: count,
+        pending: 0,
+        approved: earnings,
+        total: earnings
+      });
+    } catch (err) {
+      console.warn('[WalletView] Erro ao carregar dados de referência:', err);
+    }
+  }
+
+  loadReferral();
+}, [currentUser]);
 
   const filteredTransactions = transactions.filter((tx) => {
     if (filter === 'all') return true;
@@ -325,80 +398,381 @@ export const WalletView: React.FC<WalletViewProps> = ({
 
 
       {/* Referral Program Dashboard Banner (10 Convites = $1.00 USD) */}
-      <div className="glass-panel rounded-3xl p-6 border border-amber-500/30 bg-gradient-to-r from-amber-950/20 via-slate-900 to-cyan-950/20 shadow-2xl relative overflow-hidden">
-        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
-          <div className="space-y-2 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="px-3 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-xs font-bold font-mono flex items-center gap-1.5">
-                <Gift className="w-3.5 h-3.5 text-amber-400" />
-                <span>PROGRAMA DE REFERÊNCIA 10 = $1 USD</span>
-              </span>
-            </div>
-            <h3 className="text-xl font-cyber font-bold text-white tracking-wide">
-              Convide Amigos e Ganhe $1.00 USD Direto na Carteira!
-            </h3>
-            <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-              A cada <strong>10 novos utilizadores</strong> que se registarem utilizando o seu código de convite exclusivo, ganha automaticamente <strong>$1.00 USD</strong> adicionado diretamente ao seu saldo disponível!
-            </p>
+      {/* ================================
+    PROGRAMAS DE REFERÊNCIAS
+================================ */}
 
-            {/* Referral Code Box */}
-            <div className="pt-2 flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-2 bg-slate-950 border border-amber-500/40 rounded-xl px-4 py-2">
-                <span className="text-xs text-slate-400 font-mono">Seu Código:</span>
-                <strong className="text-amber-400 font-mono text-sm tracking-wider">
-                  {currentUser.referralCode || 'SKY-ALEX1'}
-                </strong>
-                <button
-                  onClick={() => {
-                    audioManager.playButtonClick();
-                    const code = currentUser.referralCode || 'SKY-ALEX1';
-                    navigator.clipboard.writeText(code);
-                    store.addNotification({
-                      type: 'referral_bonus',
-                      title: '📋 Código Copiado',
-                      message: `Seu código de indicação (${code}) foi copiado para a área de transferência!`
-                    });
-                  }}
-                  className="ml-2 p-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 transition cursor-pointer"
-                  title="Copiar Código"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                </button>
-              </div>
+<div
+className="
+rounded-2xl
+border
+border-cyan-500/20
+bg-gradient-to-br
+from-slate-900
+to-slate-950
+p-6
+shadow-lg
+"
+>
 
-              {/* Progress to next $1 USD */}
-              <div className="flex items-center gap-3 bg-slate-950/80 border border-slate-800 rounded-xl px-4 py-2 text-xs">
-                <Users className="w-4 h-4 text-cyan-400" />
-                <div>
-                  <span className="text-slate-400 block text-[10px]">Progresso Atual:</span>
-                  <span className="text-white font-mono font-bold">
-                    {currentUser.referralCount || 0} / 10 amigos
-                  </span>
-                </div>
-                <div className="w-20 h-2 bg-slate-800 rounded-full overflow-hidden ml-2">
-                  <div
-                    className="h-full bg-gradient-to-r from-cyan-400 to-amber-400 rounded-full transition-all duration-500"
-                    style={{ width: `${((currentUser.referralCount || 0) % 10) * 10}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
 
-          {/* Total Referral Earnings Badge */}
-          <div className="p-4 rounded-2xl bg-slate-950/90 border border-amber-500/30 flex flex-col items-center justify-center text-center shrink-0 min-w-[170px]">
-            <span className="text-[10px] text-amber-300 uppercase tracking-wider font-semibold mb-1">
-              Ganhos de Convite
-            </span>
-            <span className="text-2xl font-cyber font-black text-emerald-400">
-              +${(currentUser.referralEarnings || 0).toFixed(2)} USD
-            </span>
-            <span className="text-[10px] text-slate-400 font-mono mt-1">
-              {currentUser.referralCount || 0} Registos Totais
-            </span>
-          </div>
-        </div>
-      </div>
+<div
+className="
+flex
+items-center
+justify-between
+mb-5
+"
+>
+
+
+<div>
+
+<h3
+className="
+text-lg
+font-bold
+text-white
+"
+>
+Programa de Referências
+</h3>
+
+
+<p
+className="
+text-xs
+text-slate-400
+mt-1
+"
+>
+Convide jogadores e ganhe comissões sobre o primeiro depósito qualificado.
+</p>
+
+
+</div>
+
+
+<div
+className="
+text-cyan-400
+"
+>
+
+<Users className="w-6 h-6"/>
+
+</div>
+
+
+</div>
+
+
+
+
+{/* Código */}
+
+<div
+className="
+bg-black/30
+rounded-xl
+p-4
+border
+border-white/10
+"
+>
+
+
+<p
+className="
+text-xs
+text-slate-400
+"
+>
+Meu código
+</p>
+
+
+<div
+className="
+mt-2
+text-xl
+font-bold
+text-cyan-400
+"
+>
+{
+referralCode || 
+'A carregar...'
+}
+</div>
+
+
+</div>
+
+
+
+
+{/* Link */}
+
+<div
+className="
+mt-4
+"
+>
+
+
+<p
+className="
+text-xs
+text-slate-400
+mb-2
+"
+>
+Meu link de convite
+</p>
+
+
+
+<div
+className="
+flex
+gap-2
+"
+>
+
+
+<input
+
+readOnly
+
+value={
+referralLink
+}
+
+className="
+flex-1
+rounded-xl
+bg-black/40
+border
+border-white/10
+px-4
+py-3
+text-xs
+text-white
+outline-none
+"
+
+/>
+
+
+
+<button
+
+onClick={()=>{
+
+navigator.clipboard.writeText(
+referralLink
+);
+
+audioManager.playButtonClick();
+
+}}
+
+className="
+rounded-xl
+bg-cyan-500/20
+border
+border-cyan-500/30
+px-4
+text-cyan-400
+hover:bg-cyan-500/30
+transition
+"
+
+>
+
+<Copy className="w-5 h-5"/>
+
+</button>
+
+
+</div>
+
+
+</div>
+
+
+
+
+
+{/* Estatísticas */}
+
+<div
+className="
+grid
+grid-cols-2
+md:grid-cols-4
+gap-3
+mt-5
+"
+>
+
+
+<div
+className="
+bg-black/30
+rounded-xl
+p-3
+"
+>
+
+<p
+className="
+text-xs
+text-slate-400
+"
+>
+Convidados
+</p>
+
+
+<p
+className="
+text-xl
+font-bold
+text-white
+"
+>
+{
+referralStats.guests
+}
+</p>
+
+
+</div>
+
+
+
+
+<div
+className="
+bg-black/30
+rounded-xl
+p-3
+"
+>
+
+<p
+className="
+text-xs
+text-slate-400
+"
+>
+Pendentes
+</p>
+
+
+<p
+className="
+text-xl
+font-bold
+text-yellow-400
+"
+>
+$
+{
+referralStats.pending.toFixed(2)
+}
+
+</p>
+
+
+</div>
+
+
+
+
+
+<div
+className="
+bg-black/30
+rounded-xl
+p-3
+"
+>
+
+<p
+className="
+text-xs
+text-slate-400
+"
+>
+Aprovadas
+</p>
+
+
+<p
+className="
+text-xl
+font-bold
+text-green-400
+"
+>
+$
+{
+referralStats.approved.toFixed(2)
+}
+
+</p>
+
+
+</div>
+
+
+
+
+
+<div
+className="
+bg-black/30
+rounded-xl
+p-3
+"
+>
+
+<p
+className="
+text-xs
+text-slate-400
+"
+>
+Total ganho
+</p>
+
+
+<p
+className="
+text-xl
+font-bold
+text-cyan-400
+"
+>
+$
+{
+referralStats.total.toFixed(2)
+}
+
+</p>
+
+
+</div>
+
+
+</div>
+
+
+
+</div>
 
       {/* Airtm Official Banner */}
       <div className="p-5 rounded-2xl bg-gradient-to-r from-cyan-950/40 via-blue-950/30 to-slate-900 border border-cyan-500/30 flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -548,6 +922,7 @@ export const WalletView: React.FC<WalletViewProps> = ({
         isOpen={isAvatarOpen}
         onClose={() => setIsAvatarOpen(false)}
         currentAvatarUrl={currentUser.avatar}
+        onSelectAvatar={(avatarUrl) => store.updateUserAvatar(avatarUrl)}
       />
     </div>
   );
