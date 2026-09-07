@@ -40,7 +40,7 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
       setRules(currentRules);
       setErrorMessage(null);
       setSuccessRef(null);
-      const defaultAmt = currentRules.remainingDailyLimit > 0 ? Math.min(10, currentRules.remainingDailyLimit) : 10;
+      const defaultAmt = currentRules.remainingDailyLimit > 0 ? Math.min(100, currentRules.remainingDailyLimit) : 100;
       setAmount(defaultAmt);
     }
   }, [isOpen]);
@@ -51,8 +51,29 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
     e.preventDefault();
     setErrorMessage(null);
 
-    if (amount < 10) {
-      setErrorMessage('O valor mínimo para levantamento é de $10.00 USD.');
+    if (amount < 100) {
+      setErrorMessage('O valor mínimo para levantamento é de $100.00 USD.');
+      return;
+    }
+
+    if (amount > 100 && !rules.isVerified) {
+      setErrorMessage('É necessário verificar a sua conta (KYC) para efetuar levantamentos superiores a $100.00 USD.');
+      return;
+    }
+
+    if (!rules.canWithdrawNow) {
+      const minsLeft = Math.ceil(rules.cooldownRemainingMs / (60 * 1000));
+      const hoursLeft = Math.floor(minsLeft / 60);
+      const remainingMins = minsLeft % 60;
+      const timeStr = hoursLeft > 0 ? `${hoursLeft}h ${remainingMins}m` : `${minsLeft} min`;
+      setErrorMessage(`Aguarde o tempo regulamentar de 2 horas entre levantamentos. Tempo restante: ${timeStr}.`);
+      return;
+    }
+
+    if (!rules.wagerProgress.satisfiesWagerRequirement) {
+      setErrorMessage(
+        `Regra de Movimentação de Depósito: Você deve apostar 100% do valor depositado ($${rules.wagerProgress.totalDeposited.toFixed(2)} USD) antes de sacar. Falta apostar $${rules.wagerProgress.remainingWagerRequired.toFixed(2)} USD.`
+      );
       return;
     }
 
@@ -162,12 +183,12 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
                   {rules.isVerified ? (
                     <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-950/80 border border-emerald-500/40 text-emerald-400 text-[11px] font-bold">
                       <UserCheck className="w-3.5 h-3.5" />
-                      Verificado — $500/dia
+                      Conta Verificada (Sem Restrições)
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-950/80 border border-amber-500/40 text-amber-400 text-[11px] font-bold">
                       <UserX className="w-3.5 h-3.5" />
-                      Não Verificado — $100/dia
+                      Não Verificada (Saque &gt; $100 Requer KYC)
                     </span>
                   )}
                 </div>
@@ -179,10 +200,30 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
                 )}
               </div>
 
+              {/* Cooldown Status */}
+              {!rules.canWithdrawNow && (
+                <div className="p-2.5 rounded-xl bg-amber-950/60 border border-amber-500/30 flex items-center gap-2 text-amber-300">
+                  <Clock className="w-4 h-4 shrink-0 text-amber-400" />
+                  <span>
+                    Aguarde 2h entre levantamentos. Restam {Math.ceil(rules.cooldownRemainingMs / (60 * 1000))} minutos.
+                  </span>
+                </div>
+              )}
+
+              {/* Deposit Wagering Progress Warning */}
+              {!rules.wagerProgress.satisfiesWagerRequirement && (
+                <div className="p-2.5 rounded-xl bg-rose-950/60 border border-rose-500/30 flex items-start gap-2 text-rose-300">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-400" />
+                  <span>
+                    Regra de Depósito: Falta apostar <strong>${rules.wagerProgress.remainingWagerRequired.toFixed(2)} USD</strong> em jogo para liberar o saque.
+                  </span>
+                </div>
+              )}
+
               {/* Daily Limit Bar */}
               <div>
                 <div className="flex justify-between text-[11px] text-slate-400 mb-1">
-                  <span>{t('wallet.dailyLimitVerified', 'Limite Diário')}:</span>
+                  <span>Limite Diário ($500.00 USD máx):</span>
                   <span className="font-mono font-semibold text-white">
                     ${rules.usedToday.toFixed(2)} / ${rules.maxDailyLimit.toFixed(2)} USD
                   </span>
@@ -200,7 +241,7 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
                   />
                 </div>
                 <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-mono">
-                  <span>{t('wallet.balanceAvailable', 'Disponível')}:</span>
+                  <span>Disponível para Saque Hoje:</span>
                   <strong className="text-emerald-400 font-bold">${rules.remainingDailyLimit.toFixed(2)} USD</strong>
                 </div>
               </div>
@@ -218,10 +259,10 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
             <div>
               <div className="flex justify-between items-center mb-1">
                 <label className="text-slate-300 font-semibold">{t('wallet.withdrawAmount', 'Valor do Saque (USD)')}</label>
-                <span className="text-slate-400 text-[11px]">{t('wallet.minWithdraw', 'Mínimo: $10.00 USD')}</span>
+                <span className="text-slate-400 text-[11px]">Mínimo: $100.00 USD</span>
               </div>
               <div className="grid grid-cols-4 gap-2 mb-2">
-                {[10, 25, 50, 100].map((quick) => (
+                {[100, 200, 300, 500].map((quick) => (
                   <button
                     key={quick}
                     type="button"
@@ -240,7 +281,7 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
                 <span className="text-emerald-400 font-cyber font-bold text-lg mr-2">$</span>
                 <input
                   type="number"
-                  min={10}
+                  min={100}
                   max={rules.remainingDailyLimit}
                   value={amount}
                   onChange={(e) => setAmount(parseFloat(e.target.value) || 0)}
@@ -266,7 +307,7 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
             </div>
 
             {errorMessage && (
-              <div className="p-3 rounded-xl bg-red-950/80 border border-red-800 text-red-300 text-xs">
+              <div className="p-3 rounded-xl bg-red-950/80 border border-red-800 text-red-300 text-xs font-medium">
                 {errorMessage}
               </div>
             )}
@@ -274,7 +315,7 @@ export const WithdrawalModal: React.FC<WithdrawalModalProps> = ({
             <button
               id="btn-confirm-withdraw"
               type="submit"
-              disabled={isSubmitting || amount < 10 || amount > availableBalance}
+              disabled={isSubmitting || amount < 100 || amount > availableBalance || !rules.canWithdrawNow || !rules.wagerProgress.satisfiesWagerRequirement}
               className="w-full py-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-cyber font-bold text-sm tracking-wider uppercase shadow-lg shadow-emerald-500/30 transition disabled:opacity-50 cursor-pointer"
             >
               {isSubmitting ? '...' : `${t('wallet.confirmWithdraw', 'CONFIRMAR SAQUE')} ($${amount.toFixed(2)} USD)`}

@@ -1181,20 +1181,51 @@ class SkybirdStore {
       .reduce((acc, tx) => acc + tx.amount, 0);
   }
 
+  /** Returns the last successful or pending withdrawal timestamp for a user */
+  public getLastWithdrawalTime(userId = this.currentUser.id): number | null {
+    const userWths = this.transactions
+      .filter(tx => tx.userId === userId && tx.type === 'withdrawal' && tx.status !== 'failed' && tx.status !== 'cancelled')
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return userWths.length > 0 ? new Date(userWths[0].createdAt).getTime() : null;
+  }
+
+  /** Returns total deposited and total wagered amounts for a user to enforce 100% wagering requirement */
+  public getUserWagerProgress(userId = this.currentUser.id) {
+    const totalDeposited = this.transactions
+      .filter(tx => tx.userId === userId && tx.type === 'deposit' && tx.status === 'completed')
+      .reduce((acc, tx) => acc + tx.amount, 0);
+
+    const totalWagered = this.userBetHistory
+      .filter(b => b.userId === userId)
+      .reduce((acc, b) => acc + b.amount, 0);
+
+    const remainingWagerRequired = Math.max(0, Math.round((totalDeposited - totalWagered) * 100) / 100);
+
+    return { totalDeposited, totalWagered, remainingWagerRequired, satisfiesWagerRequirement: remainingWagerRequired <= 0 };
+  }
+
   /**
    * Retrieves official withdrawal rules:
-   * - Minimum withdrawal: from $10.00 USD
-   * - Max limit per day: $500.00 USD (for verified accounts)
-   * - Unverified accounts: limited to $100.00 USD per day
-   * - Processing time: between 15 to 30 minutes to reflect in Airtm wallet
+   * - Minimum withdrawal: $100.00 USD
+   * - Verification: Accounts must be verified to withdraw > $100.00 USD
+   * - Cooldown: 2 hours mandatory wait between withdrawals
+   * - Deposit Wagering: 100% of deposited amount must be wagered in bets before withdrawing
+   * - Max limit per day: $500.00 USD
    */
   public getWithdrawalRules(userId = this.currentUser.id) {
     const user = this.users.find((u) => u.id === userId) || this.currentUser;
     const isVerified = Boolean(user.isVerified);
-    const minWithdrawal = 10.00;
-    const maxDailyLimit = isVerified ? 500.00 : 100.00;
+    const minWithdrawal = 100.00;
+    const maxDailyLimit = 500.00;
     const usedToday = this.getTodayWithdrawals(userId);
     const remainingDailyLimit = Math.max(0, Math.round((maxDailyLimit - usedToday) * 100) / 100);
+    const lastWthTime = this.getLastWithdrawalTime(userId);
+
+    const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+    const cooldownRemainingMs = lastWthTime ? Math.max(0, (lastWthTime + TWO_HOURS_MS) - Date.now()) : 0;
+    const canWithdrawNow = cooldownRemainingMs === 0;
+
+    const wagerProgress = this.getUserWagerProgress(userId);
 
     return {
       minWithdrawal,
@@ -1202,6 +1233,9 @@ class SkybirdStore {
       usedToday,
       remainingDailyLimit,
       isVerified,
+      cooldownRemainingMs,
+      canWithdrawNow,
+      wagerProgress,
       processingTimeText: '15 a 30 minutos'
     };
   }
@@ -1223,13 +1257,6 @@ class SkybirdStore {
 
   // --- KYC / IDENTITY VERIFICATION ---
 
-  /**
-   * User submits a KYC verification request with:
-   * - document photo (base64)
-   * - selfie holding the document (base64)
-   * - Airtm account for withdrawals
-   * - WhatsApp contact number
-   */
   public submitVerificationRequest(data: {
     idDocumentImage: string;
     selfieImage: string;
@@ -1238,7 +1265,6 @@ class SkybirdStore {
   }): VerificationRequest {
     const user = this.currentUser;
 
-    // Cancel any previous pending request from this user
     this.verificationRequests = this.verificationRequests.filter(
       (r) => !(r.userId === user.id && r.status === 'pending')
     );
@@ -1260,12 +1286,11 @@ class SkybirdStore {
     this.verificationRequests.unshift(req);
 
     if (isSupabaseConfigured && user.id !== 'usr_guest') {
-      // CRITICAL: Do NOT send 'id' — let Supabase auto-generate a valid UUID
       supabase.from('kyc_verifications').insert({
         user_id: req.userId,
         user_name: req.userName,
         user_email: req.userEmail,
-        id_document_url: data.idDocumentImage.slice(0, 500), // store more of the data URL
+        id_document_url: data.idDocumentImage.slice(0, 500),
         selfie_url: data.selfieImage.slice(0, 500),
         airtm_account: req.airtmAccount,
         whatsapp_number: req.whatsappNumber,
@@ -1275,11 +1300,9 @@ class SkybirdStore {
         if (error) {
           console.error('[LEDGER ERROR][ADMIN][KYC] Erro ao gravar verificação KYC:', error.message, 'code:', error.code);
         } else if (kycData?.id) {
-          // Update local request ID to match server-generated UUID
           const rIdx = this.verificationRequests.findIndex(r => r.userId === req.userId && r.submittedAt === req.submittedAt);
           if (rIdx >= 0) this.verificationRequests[rIdx].id = kycData.id;
           req.id = kycData.id;
-          console.log('[Supabase] KYC gravado com sucesso. ID:', kycData.id);
         }
       });
     }
@@ -1302,38 +1325,30 @@ class SkybirdStore {
     return req;
   }
 
-  /** Returns the current KYC verification request for a specific user */
   public getUserVerificationRequest(userId = this.currentUser.id): VerificationRequest | null {
     return this.verificationRequests.find((r) => r.userId === userId) || null;
   }
 
-  /** Returns all verification requests (admin only) */
   public getVerificationRequests(): VerificationRequest[] {
     return [...this.verificationRequests];
   }
 
-  /** Admin: Approve a verification request and mark user as verified */
   public approveVerification(requestId: string): void {
     const req = this.verificationRequests.find((r) => r.id === requestId);
     if (!req || req.status !== 'pending') return;
 
     req.status = 'approved';
     req.reviewedAt = new Date().toISOString();
-
-    // Mark user as verified
     this.toggleUserVerification(req.userId, true);
 
-    // Sync to Supabase kyc_verifications + profiles
     if (isSupabaseConfigured) {
       supabase.from('kyc_verifications').update({
         status: 'approved',
         reviewed_at: req.reviewedAt
       }).eq('id', requestId).then(({ error }) => {
         if (error) console.error('[LEDGER ERROR][ADMIN][KYC] Erro ao aprovar KYC no Supabase:', error.message);
-        else console.log('[Supabase] KYC aprovado para', req.userId);
       });
 
-      // Update profile as verified
       supabase.from('profiles').update({
         is_verified: true,
         verification_status: 'verified'
@@ -1345,7 +1360,7 @@ class SkybirdStore {
     this.addNotification({
       type: 'kyc_approved',
       title: '✅ Conta Verificada com Sucesso!',
-      message: 'Sua identidade foi verificada. Seu limite de saque diário foi aumentado para $500.00 USD.',
+      message: 'Sua identidade foi verificada. Seu limite de saque diário é de $500.00 USD e você pode efetuar saques acima de $100.00 USD.',
       userId: req.userId
     });
 
@@ -1359,7 +1374,6 @@ class SkybirdStore {
     this.notify();
   }
 
-  /** Admin: Reject a verification request with a reason */
   public rejectVerification(requestId: string, reason: string): void {
     const req = this.verificationRequests.find((r) => r.id === requestId);
     if (!req || req.status !== 'pending') return;
@@ -1368,7 +1382,6 @@ class SkybirdStore {
     req.reviewedAt = new Date().toISOString();
     req.rejectionReason = reason || 'Documentos inválidos ou ilegíveis.';
 
-    // Sync rejection to Supabase
     if (isSupabaseConfigured) {
       supabase.from('kyc_verifications').update({
         status: 'rejected',
@@ -1376,7 +1389,6 @@ class SkybirdStore {
         reviewed_at: req.reviewedAt
       }).eq('id', requestId).then(({ error }) => {
         if (error) console.error('[LEDGER ERROR][ADMIN][KYC] Erro ao rejeitar KYC no Supabase:', error.message);
-        else console.log('[Supabase] KYC rejeitado para', req.userId);
       });
     }
 
@@ -1398,30 +1410,47 @@ class SkybirdStore {
   }
 
   /**
-   * Atomic withdrawal request:
-   * - Deducts amount from available balance to reserve funds.
-   * - Status set to 'pending' for Administrative approval.
-   * - Credit time: 15 to 30 minutes to Airtm wallet upon admin release.
+   * Atomic withdrawal request enforcing:
+   * 1. Min $100.00 USD
+   * 2. Verification requirement for > $100.00 USD
+   * 3. 2-hour cooldown period between withdrawals
+   * 4. 100% deposit wagering requirement
+   * 5. Max $500.00 USD daily limit
    */
   public requestWithdrawal(amount: number, method: 'Airtm' = 'Airtm', details: string = ''): WalletTransaction {
     const rules = this.getWithdrawalRules(this.currentUser.id);
 
-    // Rule 1: Minimum withdrawal is 10 USD
-    if (amount < 10.00) {
-      throw new Error('O valor mínimo para levantamento é de $10.00 USD.');
+    // Rule 1: Minimum withdrawal is 100 USD
+    if (amount < 100.00) {
+      throw new Error('O valor mínimo para levantamento é de $100.00 USD.');
     }
 
-    // Rule 2: Daily withdrawal limit ($500 for verified, $100 for unverified)
+    // Rule 2: Only verified accounts can withdraw above 100 USD
+    if (amount > 100.00 && !rules.isVerified) {
+      throw new Error('É necessário ter a conta verificada (KYC) para efetuar levantamentos superiores a $100.00 USD. Por favor, envie a sua documentação na seção de Carteira.');
+    }
+
+    // Rule 3: 2-hour cooldown check between withdrawals
+    if (!rules.canWithdrawNow) {
+      const minsLeft = Math.ceil(rules.cooldownRemainingMs / (60 * 1000));
+      const hoursLeft = Math.floor(minsLeft / 60);
+      const remainingMins = minsLeft % 60;
+      const timeStr = hoursLeft > 0 ? `${hoursLeft}h ${remainingMins}m` : `${minsLeft} min`;
+      throw new Error(`Aguarde o tempo de espera regulamentar de 2 horas entre levantamentos. Tempo restante: ${timeStr}.`);
+    }
+
+    // Rule 4: 100% deposit wagering requirement
+    if (!rules.wagerProgress.satisfiesWagerRequirement) {
+      throw new Error(
+        `Regra de Movimentação de Depósito: Para sacar, você deve apostar no mínimo 100% do valor depositado ($${rules.wagerProgress.totalDeposited.toFixed(2)} USD). Falta apostar $${rules.wagerProgress.remainingWagerRequired.toFixed(2)} USD antes de solicitar o saque.`
+      );
+    }
+
+    // Rule 5: Daily withdrawal limit ($500 USD max per day)
     if (amount > rules.remainingDailyLimit) {
-      if (!rules.isVerified) {
-        throw new Error(
-          `Limite diário excedido. Contas não verificadas têm limite de saque de $100.00 USD por dia (Já sacou $${rules.usedToday.toFixed(2)} USD hoje). Verifique sua conta para aumentar para $500.00 USD/dia.`
-        );
-      } else {
-        throw new Error(
-          `Limite diário excedido. O limite de levantamento é de $500.00 USD por dia (Já sacou $${rules.usedToday.toFixed(2)} USD hoje. Disponível hoje: $${rules.remainingDailyLimit.toFixed(2)} USD).`
-        );
-      }
+      throw new Error(
+        `Limite diário excedido. O limite máximo de levantamento é de $500.00 USD por dia (Já sacou $${rules.usedToday.toFixed(2)} USD hoje. Disponível hoje: $${rules.remainingDailyLimit.toFixed(2)} USD).`
+      );
     }
 
     const wallet = this.getWallet(this.currentUser.id);

@@ -204,10 +204,45 @@ export function App() {
         setIsAuthLoading(false);
       });
 
+      // Single active session enforcement via Supabase Realtime Broadcast
+      let sessionChannel: any = null;
+      const setupSingleSessionListener = (userId: string) => {
+        if (!userId || userId === 'usr_guest') return;
+        const currentSessionToken = Math.random().toString(36).substring(2);
+        sessionStorage.setItem('skybird_active_session_token', currentSessionToken);
+
+        sessionChannel = supabase.channel(`user_session_${userId}`);
+        sessionChannel
+          .on('broadcast', { event: 'new_login' }, (payload: any) => {
+            if (payload.sessionToken !== currentSessionToken) {
+              console.warn('[Security] Nova sessão detectada em outro dispositivo/aba. A encerrar sessão antiga...');
+              alert('Sua conta foi conectada em outro dispositivo ou aba. Esta sessão foi encerrada automaticamente.');
+              supabase.auth.signOut();
+              store.logout();
+              setCurrentView('landing');
+            }
+          })
+          .subscribe((status: string) => {
+            if (status === 'SUBSCRIBED') {
+              sessionChannel.send({
+                type: 'broadcast',
+                event: 'new_login',
+                payload: { sessionToken: currentSessionToken, userId }
+              });
+            }
+          });
+      };
+
+      const currentUser = store.getCurrentUser();
+      if (currentUser?.id && currentUser.id !== 'usr_guest') {
+        setupSingleSessionListener(currentUser.id);
+      }
+
       return () => {
         clearTimeout(safetyTimeout);
         unsub();
         subscription.unsubscribe();
+        if (sessionChannel) supabase.removeChannel(sessionChannel);
       };
     }
 
