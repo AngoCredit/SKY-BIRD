@@ -40,6 +40,20 @@ export const LiveBetsList: React.FC<LiveBetsListProps> = ({
     return acc;
   }, 0);
 
+  const totalRealLostAmount = realBets.reduce((acc, b) => {
+    if (b.status === 'crashed') return acc + b.amount;
+    return acc;
+  }, 0);
+
+  const totalBotLostAmount = botBets.reduce((acc, b) => {
+    if (b.status === 'crashed') return acc + b.amount;
+    return acc;
+  }, 0);
+
+  // Lucro da Casa = Total Apostado por Utilizadores Reais - Total Pago aos Utilizadores Reais
+  // Se for positivo, a casa lucrou. Se for negativo, os jogadores lucraram.
+  const houseProfit = totalRealBetsAmount - totalRealPayoutAmount;
+
   const currencySymbol = '$';
 
   return (
@@ -89,32 +103,41 @@ export const LiveBetsList: React.FC<LiveBetsListProps> = ({
       {/* Tab 1: ALL BETS */}
       {activeTab === 'all' && (
         <div className="flex flex-col flex-1">
-          <div className="px-3 py-2 bg-[#0a0d13] border-b border-[#1b2230] flex flex-col gap-1 text-[11px] font-mono">
-            <div className="flex items-center justify-between text-slate-400 border-b border-slate-800/60 pb-1">
+          <div className="px-3 py-2 bg-[#0a0d13] border-b border-[#1b2230] flex flex-col gap-1.5 text-[11px] font-mono">
+            <div className="flex items-center justify-between text-slate-400">
               <span>Participantes: {bets.length}</span>
-              <span className="text-[10px] text-slate-500 uppercase tracking-wider">Apostado / Ganho</span>
-            </div>
-            
-            <div className="grid grid-cols-2 gap-2 pt-0.5">
-              <div className="flex flex-col bg-emerald-950/30 border border-emerald-500/20 rounded-md p-1.5">
-                <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                  REAL (RL)
+              <div className="flex items-center gap-3">
+                <span>
+                  Vol. Real: <strong className="text-cyan-400 font-bold">{totalRealBetsAmount.toFixed(2)}{currencySymbol}</strong>
                 </span>
-                <div className="flex items-baseline justify-between mt-0.5">
-                  <span className="text-slate-300 text-[10px]">Ap: <strong className="text-white font-bold">{totalRealBetsAmount.toFixed(2)}{currencySymbol}</strong></span>
-                  <span className="text-emerald-400 text-[10px]">Gn: <strong className="text-emerald-300 font-bold">+{totalRealPayoutAmount.toFixed(2)}{currencySymbol}</strong></span>
+                <span>
+                  Lucro Casa: <strong className={houseProfit >= 0 ? "text-emerald-400 font-bold" : "text-rose-400 font-bold"}>
+                    {houseProfit >= 0 ? `+${houseProfit.toFixed(2)}` : houseProfit.toFixed(2)}{currencySymbol}
+                  </strong>
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-[10px]">
+              <div className="flex flex-col bg-emerald-950/20 border border-emerald-500/20 rounded p-1.5">
+                <div className="flex justify-between items-center text-emerald-400 font-bold">
+                  <span>Apostado Real:</span>
+                  <span>{totalRealBetsAmount.toFixed(2)}{currencySymbol}</span>
+                </div>
+                <div className="flex justify-between items-center text-rose-400 text-[9px] mt-0.5">
+                  <span>Perdido Real:</span>
+                  <span>{totalRealLostAmount.toFixed(2)}{currencySymbol}</span>
                 </div>
               </div>
 
-              <div className="flex flex-col bg-cyan-950/30 border border-cyan-500/20 rounded-md p-1.5">
-                <span className="text-[10px] text-cyan-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
-                  BOT (BT)
-                </span>
-                <div className="flex items-baseline justify-between mt-0.5">
-                  <span className="text-slate-300 text-[10px]">Ap: <strong className="text-white font-bold">{totalBotBetsAmount.toFixed(2)}{currencySymbol}</strong></span>
-                  <span className="text-cyan-400 text-[10px]">Gn: <strong className="text-cyan-300 font-bold">+{totalBotPayoutAmount.toFixed(2)}{currencySymbol}</strong></span>
+              <div className="flex flex-col bg-slate-900/40 border border-slate-700/40 rounded p-1.5">
+                <div className="flex justify-between items-center text-slate-300 font-bold">
+                  <span>Vol. Bots:</span>
+                  <span>{totalBotBetsAmount.toFixed(2)}{currencySymbol}</span>
+                </div>
+                <div className="flex justify-between items-center text-rose-400/80 text-[9px] mt-0.5">
+                  <span>Perdido Bots:</span>
+                  <span>{totalBotLostAmount.toFixed(2)}{currencySymbol}</span>
                 </div>
               </div>
             </div>
@@ -127,9 +150,9 @@ export const LiveBetsList: React.FC<LiveBetsListProps> = ({
               </div>
             ) : (
               bets.map((bet) => {
-                const isBot = isPresentationBot(bet);
                 const isCashed = bet.status === 'cashed_out';
                 const isCrashed = bet.status === 'crashed';
+                const displayName = bet.userName.replace(/^BOT\s*•\s*/i, '');
 
                 return (
                   <div
@@ -147,12 +170,12 @@ export const LiveBetsList: React.FC<LiveBetsListProps> = ({
                     <div className="flex items-center gap-2">
                       <img
                         src={bet.userAvatar}
-                        alt={bet.userName}
+                        alt={displayName}
                         className="w-5 h-5 rounded-full bg-slate-800 object-cover"
                       />
                       <div className="flex flex-col">
                         <span className={`font-semibold text-[11px] ${bet.isCurrentUser ? 'text-cyan-300 font-bold' : 'text-slate-300'}`}>
-                          {bet.userName} {bet.isCurrentUser && '(Você)'}
+                          {displayName} {bet.isCurrentUser && '(Você)'}
                         </span>
                         <span className="text-[9px] font-mono text-slate-400">
                           {bet.amount.toFixed(2)} {currencySymbol}
