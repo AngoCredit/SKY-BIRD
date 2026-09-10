@@ -13,7 +13,7 @@ export const FairnessModal: React.FC<FairnessModalProps> = ({ round, onClose }) 
   const { t } = useTranslation();
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
-  // Custom Validator Inputs
+  // Custom Validator Inputs with safe defaults
   const [testServerSeed, setTestServerSeed] = useState(round?.serverSeed || '');
   const [testServerHash, setTestServerHash] = useState(round?.serverSeedHash || '');
   const [testClientSeed, setTestClientSeed] = useState(round?.clientSeed || 'skybird_global_seed_2026');
@@ -22,7 +22,14 @@ export const FairnessModal: React.FC<FairnessModalProps> = ({ round, onClose }) 
 
   if (!round) return null;
 
+  const safeCrashPoint = typeof round.crashPoint === 'number' ? round.crashPoint : 1.00;
+  const safeRoundNumber = round.roundNumber || 0;
+  const safeServerHash = round.serverSeedHash || 'N/A';
+  const safeClientSeed = round.clientSeed || 'N/A';
+  const safeNonce = round.nonce ?? 0;
+
   const copyToClipboard = (text: string, field: string) => {
+    if (!text) return;
     navigator.clipboard.writeText(text);
     setCopiedField(field);
     setTimeout(() => setCopiedField(null), 2000);
@@ -30,13 +37,17 @@ export const FairnessModal: React.FC<FairnessModalProps> = ({ round, onClose }) 
 
   const handleRunVerification = (e: React.FormEvent) => {
     e.preventDefault();
-    const result = verifyRoundFairness(
-      testServerSeed,
-      testServerHash || hashServerSeed(testServerSeed),
-      testClientSeed,
-      Number(testNonce)
-    );
-    setTestResult(result);
+    try {
+      const result = verifyRoundFairness(
+        testServerSeed,
+        testServerHash || hashServerSeed(testServerSeed),
+        testClientSeed,
+        Number(testNonce)
+      );
+      setTestResult(result);
+    } catch (err) {
+      console.warn('[FairnessModal] verification error:', err);
+    }
   };
 
   return (
@@ -72,13 +83,13 @@ export const FairnessModal: React.FC<FairnessModalProps> = ({ round, onClose }) 
             <div>
               <span className="text-xs text-slate-500 block">Round</span>
               <span className="font-cyber font-bold text-white text-base">
-                #{round.roundNumber} ({round.id})
+                #{safeRoundNumber} {round.id ? `(${round.id})` : ''}
               </span>
             </div>
             <div className="text-right">
               <span className="text-xs text-slate-500 block">Multiplier Crash Point</span>
               <span className="font-cyber font-bold text-emerald-400 text-lg">
-                {round.crashPoint.toFixed(2)}x
+                {safeCrashPoint.toFixed(2)}x
               </span>
             </div>
           </div>
@@ -92,7 +103,7 @@ export const FairnessModal: React.FC<FairnessModalProps> = ({ round, onClose }) 
               </span>
               <button
                 type="button"
-                onClick={() => copyToClipboard(round.serverSeedHash, 'hash')}
+                onClick={() => copyToClipboard(safeServerHash, 'hash')}
                 className="text-xs text-slate-400 hover:text-cyan-300 flex items-center gap-1 cursor-pointer"
               >
                 {copiedField === 'hash' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
@@ -100,7 +111,7 @@ export const FairnessModal: React.FC<FairnessModalProps> = ({ round, onClose }) 
               </button>
             </div>
             <p className="font-mono text-xs text-slate-300 break-all select-all bg-slate-900/60 p-2 rounded border border-slate-800">
-              {round.serverSeedHash}
+              {safeServerHash}
             </p>
           </div>
 
@@ -129,14 +140,14 @@ export const FairnessModal: React.FC<FairnessModalProps> = ({ round, onClose }) 
             <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800">
               <span className="text-xs font-semibold text-slate-400 block mb-1">Client Seed</span>
               <p className="font-mono text-xs text-slate-300 break-all bg-slate-900/60 p-2 rounded border border-slate-800">
-                {round.clientSeed}
+                {safeClientSeed}
               </p>
             </div>
 
             <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800">
               <span className="text-xs font-semibold text-slate-400 block mb-1">Nonce</span>
               <p className="font-mono text-xs text-slate-300 bg-slate-900/60 p-2 rounded border border-slate-800">
-                {round.nonce}
+                {safeNonce}
               </p>
             </div>
           </div>
