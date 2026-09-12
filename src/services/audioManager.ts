@@ -54,6 +54,35 @@ class AudioManager {
   private lastMilestonePassed = 1;
   private isAudioUnlocked = false;
 
+  // Track unique played events per round to ensure idempotency
+  private playedEvents = new Set<string>();
+  private currentRoundId: string | null = null;
+
+  /**
+   * Reset played events when transitioning to a new round.
+   */
+  public syncRound(roundId: string) {
+    if (this.currentRoundId !== roundId) {
+      this.currentRoundId = roundId;
+      this.playedEvents.clear();
+    }
+  }
+
+  /**
+   * Play an event sound at most once per round.
+   * Returns true if sound was played, false if skipped due to duplicate.
+   */
+  public playOncePerRound(roundId: string, eventKey: string, action: () => void): boolean {
+    this.syncRound(roundId);
+    const fullKey = `${roundId}:${eventKey}`;
+    if (this.playedEvents.has(fullKey)) {
+      return false;
+    }
+    this.playedEvents.add(fullKey);
+    action();
+    return true;
+  }
+
   constructor() {
     // Setup global gesture listener to instantly unlock and resume AudioContext on modern browsers
     if (typeof window !== 'undefined') {

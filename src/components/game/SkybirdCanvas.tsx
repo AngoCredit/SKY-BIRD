@@ -469,10 +469,12 @@ export const SkybirdCanvas: React.FC<SkybirdCanvasProps> = React.memo(({
           }
 
           // Smooth 3D Ascent Trajectory & Aerodynamic Pitch/Roll
-          const targetBank = Math.sin(elapsedTime * 1.4) * 0.12;
+          // Deterministically bound to current multiplier
+          const flightTime = Math.log(Math.max(1, curMult)) / 0.25;
+          const targetBank = Math.sin(flightTime * 1.4) * 0.12;
           const targetPitch = -0.12 - Math.min((curMult - 1) * 0.03, 0.35);
-          const targetY = Math.sin(elapsedTime * 1.8) * 0.25 + Math.min((curMult - 1) * 0.12, 2.2);
-          const targetX = Math.sin(elapsedTime * 1.1) * 0.3;
+          const targetY = Math.sin(flightTime * 1.8) * 0.25 + Math.min((curMult - 1) * 0.12, 2.2);
+          const targetX = Math.sin(flightTime * 1.1) * 0.3;
 
           // Exponential dampening for buttery 60-120fps motion
           birdGroup.rotation.z = damp(birdGroup.rotation.z, targetBank, 8, delta);

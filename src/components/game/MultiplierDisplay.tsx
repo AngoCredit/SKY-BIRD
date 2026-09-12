@@ -1,17 +1,15 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React from 'react';
 import { AltitudeStage, GameRoundStatus } from '../../types';
 import { ShieldCheck, PlaneTakeoff } from 'lucide-react';
 
-// How long the countdown phase lasts (must match server)
-const COUNTDOWN_DURATION_MS = 5000;
+import { RoundTimeline } from '../../services/authoritativeGame';
 
 interface MultiplierDisplayProps {
   status: GameRoundStatus;
   multiplier: number;
   crashPoint: number;
   altitudeStage: AltitudeStage;
-  /** Timestamp (ms) when the round transitions to RUNNING. Used to drive the loading bar locally. */
-  roundStartsAt: number | null;
+  timeline?: RoundTimeline | null;
   cashedOutMultiplier: number | null;
   cashedOutPayout: number | null;
   onOpenFairness: () => void;
@@ -21,40 +19,16 @@ export const MultiplierDisplay: React.FC<MultiplierDisplayProps> = ({
   status,
   multiplier,
   crashPoint,
-  roundStartsAt,
+  timeline,
   cashedOutMultiplier,
   cashedOutPayout,
   onOpenFairness,
 }) => {
-  // Local high-frequency progress state (0-100)
-  const [fillPct, setFillPct] = useState(0);
-  const [secLeft, setSecLeft] = useState(5);
-  const rafRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    const isWaitingOrCountdown = status === 'WAITING' || status === 'COUNTDOWN';
-
-    if (!isWaitingOrCountdown) {
-      setFillPct(0);
-      setSecLeft(5);
-      return;
-    }
-
-    const start = Date.now();
-    const WAITING_DURATION = 5000;
-
-    const interval = setInterval(() => {
-      const elapsed = Date.now() - start;
-      const progress = Math.min(100, (elapsed / WAITING_DURATION) * 100);
-      const remainingMs = Math.max(0, WAITING_DURATION - elapsed);
-      const sec = Math.max(1, Math.ceil(remainingMs / 1000));
-
-      setFillPct(progress);
-      setSecLeft(sec);
-    }, 100);
-
-    return () => clearInterval(interval);
-  }, [status, roundStartsAt]);
+  // Progress bar & seconds derived purely from authoritative timeline
+  const fillPct = (status === 'WAITING' || status === 'COUNTDOWN') && timeline
+    ? Math.min(100, Math.max(0, timeline.progress * 100))
+    : 0;
+  const secLeft = timeline?.countdownSeconds ?? 0;
 
   return (
     <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-between p-3 sm:p-4 z-10 select-none">

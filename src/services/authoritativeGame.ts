@@ -66,13 +66,19 @@ export async function getAuthoritativeRound(): Promise<AuthoritativeRound | null
   if (error) throw new Error(error.message);
   if (!data) return null;
 
+  // Sync server clock offset using current server timestamp if available
+  const serverTimeIso = data.started_at || data.scheduled_start_at || data.ended_at;
+  if (serverTimeIso) {
+    updateServerOffset(serverTimeIso);
+  }
+
   return {
     id: data.id,
     roundNumber: Number(data.round_number),
     status: data.status,
     startedAt: data.started_at ?? null,
     endedAt: data.ended_at ?? null,
-    scheduledStartAt: data.scheduled_start_at ?? data.started_at ?? null,
+    scheduledStartAt: data.scheduled_start_at ?? null,
     serverSeedHash: data.server_seed_hash ?? '',
     clientSeed: data.client_seed ?? '',
     nonce: Number(data.nonce ?? 0),
@@ -156,10 +162,132 @@ export async function authoritativeCancelBet(betId: string) {
 }
 
 /**
- * Returns the animation multiplier only from server start time.
+ * Server clock synchronization offset in milliseconds.
+ * serverNowMs() = Date.now() + serverClockOffsetMs
+ */
+let serverClockOffsetMs = 0;
+
+export function updateServerOffset(serverTimestampIso?: string | null) {
+  if (!serverTimestampIso) return;
+  const serverTime = new Date(serverTimestampIso).getTime();
+  if (isNaN(serverTime)) return;
+  const localNow = Date.now();
+  const newOffset = serverTime - localNow;
+
+  // Initialize once if 0, or update with heavy dampening to prevent clock jitter/jumping
+  if (serverClockOffsetMs === 0) {
+    serverClockOffsetMs = newOffset;
+  } else {
+    // Only smooth if discrepancy exceeds 1000ms, otherwise keep stable offset
+    const diff = Math.abs(newOffset - serverClockOffsetMs);
+    if (diff > 1000) {
+      serverClockOffsetMs = serverClockOffsetMs * 0.9 + newOffset * 0.1;
+    }
+  }
+}
+
+export function serverNowMs(): number {
+  return Date.now() + serverClockOffsetMs;
+}
+
+export function getServerClockOffset(): number {
+  return serverClockOffsetMs;
+}
+
+/**
+ * Single Authoritative Round Timeline derivation
+ */
+export type RoundTimeline = {
+  roundId: string;
+  status: 'WAITING' | 'COUNTDOWN' | 'RUNNING' | 'CRASHED' | 'SETTLED';
+  nowMs: number;
+  scheduledStartMs: number | null;
+  startedMs: number | null;
+  endedMs: number | null;
+  countdownRemainingMs: number;
+  countdownSeconds: number;
+  elapsedRunningMs: number;
+  progress: number;
+};
+
+// Persistent cache of round timeline reference points to guarantee monotonicity
+const roundRefCache = new Map<string, { scheduledStartMs: number; initialDurationMs: number }>();
+
+export function getRoundTimeline(round: AuthoritativeRound | null, nowMs = serverNowMs()): RoundTimeline | null {
+  if (!round) return null;
+
+  const rawScheduledStartMs = round.scheduledStartAt ? new Date(round.scheduledStartAt).getTime() : null;
+  const startedMs = round.startedAt ? new Date(round.startedAt).getTime() : null;
+  const endedMs = round.endedAt ? new Date(round.endedAt).getTime() : null;
+
+  // Ensure stable reference for the same round.id
+  let ref = roundRefCache.get(round.id);
+  if (!ref && (rawScheduledStartMs || startedMs)) {
+    const startMs = rawScheduledStartMs ?? startedMs ?? nowMs;
+    const initialRem = Math.max(5000, startMs - nowMs);
+    ref = { scheduledStartMs: startMs, initialDurationMs: initialRem };
+    roundRefCache.set(round.id, ref);
+
+    // Limit cache size
+    if (roundRefCache.size > 20) {
+      const oldestKey = roundRefCache.keys().next().value;
+      if (oldestKey) roundRefCache.delete(oldestKey);
+    }
+  }
+
+  const scheduledStartMs = ref?.scheduledStartMs ?? rawScheduledStartMs ?? startedMs;
+
+  let countdownRemainingMs = 0;
+  let countdownSeconds = 0;
+  let elapsedRunningMs = 0;
+  let progress = 0;
+
+  if (round.status === 'WAITING' || round.status === 'COUNTDOWN') {
+    const targetMs = scheduledStartMs ?? nowMs;
+    countdownRemainingMs = Math.max(0, targetMs - nowMs);
+    countdownSeconds = Math.ceil(countdownRemainingMs / 1000);
+
+    // Standard Aviator countdown window duration is 5000ms (5 seconds)
+    const duration = 5000;
+    progress = Math.min(1, Math.max(0, 1 - (countdownRemainingMs / duration)));
+
+    if (process.env.NODE_ENV === 'development') {
+      console.debug('[ROUND CLOCK]', {
+        roundId: round.id,
+        status: round.status,
+        scheduledStartMs,
+        serverNowMs: nowMs,
+        remainingMs: countdownRemainingMs,
+        seconds: countdownSeconds,
+      });
+    }
+  } else if (round.status === 'RUNNING') {
+    const start = startedMs ?? nowMs;
+    elapsedRunningMs = Math.max(0, nowMs - start);
+    progress = 1;
+  } else if (round.status === 'CRASHED' || round.status === 'SETTLED') {
+    progress = 1;
+  }
+
+  return {
+    roundId: round.id,
+    status: round.status,
+    nowMs,
+    scheduledStartMs,
+    startedMs,
+    endedMs,
+    countdownRemainingMs,
+    countdownSeconds,
+    elapsedRunningMs,
+    progress,
+  };
+}
+
+/**
+ * Returns the animation multiplier only from server start time using synchronized server clock.
  * It is visual state, not a financial authority.
  */
-export function visualMultiplier(round: AuthoritativeRound, nowMs = Date.now()): number {
+export function visualMultiplier(round: AuthoritativeRound, nowMs = serverNowMs()): number {
   if (round.status !== 'RUNNING' || !round.startedAt) return 1;
 
   const elapsedSeconds = Math.max(
@@ -214,3 +342,42 @@ export function subscribeToAuthoritativeRound(
     if (timer) clearTimeout(timer);
   };
 }
+
+/**
+ * Client-side engine fallback.
+ *
+ * Calls public.client_tick_engine() every 250 ms so the game state advances
+ * even when the persistent Node.js worker (npm run engine) is not running.
+ *
+ * When the server worker IS running it holds the advisory lock and this
+ * function returns immediately without doing financial work.
+ *
+ * Call startClientEngineLoop() once on app boot and store the returned stop().
+ */
+export function startClientEngineLoop(tickMs = 250) {
+  if (!isSupabaseConfigured) {
+    console.warn('[SKY-BIRD] Client engine loop skipped: Supabase not configured');
+    return () => {};
+  }
+
+  let stopped = false;
+
+  const tick = async () => {
+    if (stopped) return;
+    try {
+      await supabase.rpc('client_tick_engine');
+    } catch {
+      // Silently ignore — the function may not exist yet (requires FIX_CLIENT_ENGINE_TICK.sql)
+    }
+    if (!stopped) setTimeout(tick, tickMs);
+  };
+
+  // Small initial delay to let the subscription settle first
+  const initial = setTimeout(tick, 500);
+
+  return () => {
+    stopped = true;
+    clearTimeout(initial);
+  };
+}
+

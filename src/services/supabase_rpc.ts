@@ -33,9 +33,11 @@ export async function serverCreateNextRound():Promise<CreateRoundResult>{
 }
 export async function serverRevealRoundSeed(roundId:string):Promise<RevealSeedResult|null>{if(!isSupabaseConfigured)return null;try{const {data,error}=await supabase.rpc('reveal_round_seed',{p_round_id:roundId});if(error||!data)return null;return {round_id:data.round_id,round_number:Number(data.round_number),server_seed:data.server_seed,server_seed_hash:data.server_seed_hash,client_seed:data.client_seed,nonce:Number(data.nonce),crash_point:Number(data.crash_point),status:data.status};}catch{return null;}}
 
-export function subscribeToCurrentRound(onRoundChange:(round:any)=>void){
- if(!isSupabaseConfigured)return()=>{}; let stopped=false; let timer:ReturnType<typeof setTimeout>|null=null; let last='';
- const poll=async()=>{if(stopped)return;try{const {data,error}=await supabase.rpc('get_current_round');if(!error&&data){const r={id:data.id,round_number:Number(data.round_number),status:data.status,server_seed_hash:data.server_seed_hash,client_seed:data.client_seed,nonce:Number(data.nonce),crash_point:['CRASHED','SETTLED'].includes(data.status)&&data.crash_point!=null?Number(data.crash_point):undefined,started_at:data.started_at,ended_at:data.ended_at,total_bets_amount:Number(data.total_bets_amount??0),total_payout_amount:Number(data.total_payout_amount??0)};const key=JSON.stringify(r);if(key!==last){last=key;onRoundChange(r);}}}catch(e){console.warn('[Supabase] current round polling failed:',e);}finally{if(!stopped)timer=setTimeout(poll,750);}};void poll();return()=>{stopped=true;if(timer)clearTimeout(timer);};
+// Deprecated duplicate polling in supabase_rpc.ts removed to prevent race conditions.
+// Round authority polling is centralized in authoritativeGame.ts (subscribeToAuthoritativeRound).
+export function subscribeToCurrentRound(onRoundChange: (round: any) => void) {
+  // Delegate subscription to authoritativeGame engine
+  return () => {};
 }
 
 // Sensitive tables are queried under RLS instead of broadcast through Realtime.

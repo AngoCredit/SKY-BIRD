@@ -12,7 +12,7 @@ import { FairnessModal } from './FairnessModal';
 import { Volume2, VolumeX, HelpCircle, PlusCircle, X } from 'lucide-react';
 import { useTranslation } from '../../services/i18n';
 import { supabase } from '../../services/supabase';
-import { authoritativeCashout, authoritativePlaceBet, authoritativeCancelBet, subscribeToAuthoritativeRound, visualMultiplier, getAuthoritativeRoundBets } from '../../services/authoritativeGame';
+import { authoritativeCashout, authoritativePlaceBet, authoritativeCancelBet, subscribeToAuthoritativeRound, visualMultiplier, getAuthoritativeRoundBets, startClientEngineLoop, getRoundTimeline, type RoundTimeline } from '../../services/authoritativeGame';
 
 interface GameViewProps {
   currentUser: User;
@@ -106,6 +106,9 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
   }, [currentUser.id]);
 
   useEffect(() => () => audioManager.forceStopFlightAmbient(), []);
+
+  // Client-side engine fallback: keeps rounds advancing when the server worker is down
+  useEffect(() => startClientEngineLoop(250), []);
 
   const getAltitudeStage = (mult: number): AltitudeStage => {
     if (mult < 1.50) return 'STAGE_1_BLUE_SKY';
@@ -260,7 +263,11 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
         totalBetsAmount: serverRound.totalBetsAmount,
         totalPayoutAmount: serverRound.totalPayoutAmount,
       } as GameRound;
-      // Se mudou a rodada, resetar estados de cashout/aposta de painéis que já não estão ativos na nova rodada
+
+      // Sync audio manager to new round
+      audioManager.syncRound(serverRound.id);
+
+      // Se mudou a rodada, resetar estados de cashout/aposta de painéis
       if (currentRoundRef.current.id !== serverRound.id) {
         hasCashedOut1Ref.current = false; setHasCashedOut1(false); setCashedOutMultiplier1(null); setCashedOutPayout1(null);
         hasCashedOut2Ref.current = false; setHasCashedOut2(false); setCashedOutMultiplier2(null); setCashedOutPayout2(null);
@@ -276,18 +283,30 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
         }
       }
 
-      if (serverRound.status === 'COUNTDOWN') { const remaining = serverRound.startedAt ? Math.max(0, Math.ceil((new Date(serverRound.startedAt).getTime() - Date.now()) / 1000)) : 3; setCountdown(remaining); }
-      if (serverRound.status === 'RUNNING') { audioManager.startFlightAmbient(); }
-      if (serverRound.status === 'CRASHED') { setMultiplier(serverRound.crashPoint ?? 1); audioManager.stopFlightAmbient(); audioManager.playCrash(); }
+      if (serverRound.status === 'RUNNING') {
+        audioManager.playOncePerRound(serverRound.id, 'takeoff', () => {
+          audioManager.playTakeoff();
+          audioManager.startFlightAmbient();
+        });
+      }
+      if (serverRound.status === 'CRASHED') {
+        setMultiplier(serverRound.crashPoint ?? 1);
+        audioManager.stopFlightAmbient();
+        audioManager.playOncePerRound(serverRound.id, 'crash', () => {
+          audioManager.playCrash();
+        });
+      }
     }, 500);
     return unsubscribe;
-  }, [applyAuthoritativeBets]);
+  }, [applyAuthoritativeBets, triggerAutoBets]);
+
+  const [roundTimeline, setRoundTimeline] = useState<RoundTimeline | null>(null);
 
   useEffect(() => {
     let frame = 0;
     const tick = () => {
       const round = currentRoundRef.current;
-      const visual = visualMultiplier({
+      const authRound = {
         id: round.id, roundNumber: round.roundNumber, status: round.status as any,
         startedAt: round.startedAt ? new Date(round.startedAt).toISOString() : null,
         endedAt: round.endedAt ? new Date(round.endedAt).toISOString() : null,
@@ -295,22 +314,33 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
         serverSeedHash: round.serverSeedHash ?? '', clientSeed: round.clientSeed ?? '', nonce: round.nonce ?? 0,
         totalBetsAmount: round.totalBetsAmount ?? 0, totalPayoutAmount: round.totalPayoutAmount ?? 0,
         ...(round.crashPoint != null ? { crashPoint: round.crashPoint } : {})
-      });
-      setMultiplier(visual); multiplierRef.current = visual;
-      if (round.status === 'COUNTDOWN' || round.status === 'WAITING' || round.status === 'CRASHED') {
-        const targetTime = round.startedAt || 0;
-        const now = Date.now();
-        const remainingSec = targetTime > now ? (targetTime - now) / 1000 : 0;
-        setCountdown(remainingSec);
+      };
 
-        // Play countdown audio tick sound at each second boundary
-        const secInt = Math.ceil(remainingSec);
-        if (secInt !== lastCountdownSecRef.current && secInt > 0 && secInt <= 5) {
-          lastCountdownSecRef.current = secInt;
-          try { audioManager.playButtonClick(); } catch {}
+      const timeline = getRoundTimeline(authRound);
+      setRoundTimeline(timeline);
+      const visual = visualMultiplier(authRound);
+      setMultiplier(visual); multiplierRef.current = visual;
+
+      if (round.status === 'COUNTDOWN' || round.status === 'WAITING') {
+        const remainingMs = timeline?.countdownRemainingMs ?? 0;
+        const remainingFractionSec = remainingMs / 1000;
+        setCountdown(remainingFractionSec);
+
+        const remainingSec = timeline?.countdownSeconds ?? 0;
+
+        // Idempotent Audio Tick sound per second boundary per round
+        if (remainingSec > 0 && remainingSec <= 5) {
+          audioManager.playOncePerRound(round.id, `countdown:${remainingSec}`, () => {
+            try { audioManager.playButtonClick(); } catch {}
+          });
         }
       }
-      if ((round.status === 'COUNTDOWN' || round.status === 'WAITING') && round.roundNumber !== lastAutoBetRoundRef.current) { lastAutoBetRoundRef.current = round.roundNumber; triggerAutoBets(); }
+
+      if ((round.status === 'COUNTDOWN' || round.status === 'WAITING') && round.roundNumber !== lastAutoBetRoundRef.current) {
+        lastAutoBetRoundRef.current = round.roundNumber;
+        triggerAutoBets();
+      }
+
       if (round.status === 'RUNNING') {
         const stage = getAltitudeStage(visual);
         try { audioManager.updateFlightIntensity(visual, stage); } catch {}
@@ -344,7 +374,7 @@ export const GameView: React.FC<GameViewProps> = ({ currentUser, onOpenDeposit }
             <RoundHistory rounds={pastRounds} onSelectRound={(round) => setSelectedFairnessRound(round)} />
             <div className="relative w-full h-[220px] xs:h-[250px] sm:h-[320px] lg:h-[360px] min-h-[200px] overflow-hidden bg-gradient-to-b from-[#0e131d] via-[#090c12] to-[#05070a]">
               <SkybirdCanvas status={currentRound.status} multiplier={multiplier} altitudeStage={altitudeStage} quality={quality} />
-              <MultiplierDisplay status={currentRound.status} multiplier={multiplier} crashPoint={currentRound.crashPoint} altitudeStage={altitudeStage} roundStartsAt={currentRound.startedAt ?? null} cashedOutMultiplier={cashedOutMultiplier1} cashedOutPayout={cashedOutPayout1} onOpenFairness={() => setSelectedFairnessRound(currentRound)} />
+              <MultiplierDisplay status={currentRound.status} multiplier={multiplier} crashPoint={currentRound.crashPoint} altitudeStage={altitudeStage} timeline={roundTimeline} cashedOutMultiplier={cashedOutMultiplier1} cashedOutPayout={cashedOutPayout1} onOpenFairness={() => setSelectedFairnessRound(currentRound)} />
             </div>
           </div>
           <div className={`grid ${showSecondPanel ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'} gap-2`}>
